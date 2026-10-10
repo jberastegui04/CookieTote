@@ -28,9 +28,9 @@ def load(folder: Path) -> list[tuple[dict, Image.Image]]:
 
 
 def cells(depth: np.ndarray, mode: str) -> str:
-    out = []
-    for height, ys in pipeline.bands_for(mode).items():
-        vals = [np.percentile(depth[pipeline._rows(depth, ys), pipeline._cols(depth, xs)], pipeline.PERCENTILE) for xs in pipeline.COLUMNS.values()]
+    out, mask = [], pipeline.obstacle_mask(depth)
+    for height, ys in pipeline.BANDS.items():
+        vals = [pipeline._cell(depth, mask, ys, xs) for xs in pipeline.COLUMNS.values()]
         out.append(f"{height[0]}:" + "/".join(f"{v:.1f}" for v in vals))
     return "  ".join(out)
 

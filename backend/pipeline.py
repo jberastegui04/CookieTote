@@ -19,12 +19,19 @@ DEPTH_MODELS = {
 # Lane is the middle 60% of the width, split into three columns.
 COLUMNS = {"left": (0.2, 0.4), "ahead": (0.4, 0.6), "right": (0.6, 0.8)}
 # Top to bottom, no overlap, fit to venue photos (tune.py). With the phone at chest height, the top
-# 20% of the frame within 2 m is ceiling, above anyone's head, so it's skipped.
-BANDS = {"head": (0.2, 0.4), "waist": (0.4, 0.65), "foot": (0.65, 0.8)}
+# 20% of the frame within 2 m is ceiling, above anyone's head, so it's skipped. The foot band runs to
+# the bottom of the frame: that's where the things you walk into are.
+BANDS = {"head": (0.2, 0.4), "waist": (0.4, 0.65), "foot": (0.65, 1.0)}
 LANE_X = (0.2, 0.8)
-# Below this the floor fills the frame. Outdoors the ground sits inside the 4 m warning distance
-# in the foot band, so outdoor skips it (we already say outdoor doesn't detect curbs or drop-offs).
-FLOOR_CUTOFF = {"indoor": 0.8, "outdoor": 0.65}
+# The floor fills the foot band, so there a pixel only counts if it sticks up from the floor: clearly
+# nearer than most of its own row across the whole width (which is the floor at that distance).
+GROUND_TOP = 0.65
+GROUND_REF_PERCENTILE = 60
+GROUND_RAISE = 0.8  # nearer than this fraction of the row's floor distance (fit with tune.py)
+GROUND_MIN_FRACTION = 0.03  # of the cell's pixels, so a speck on the floor isn't an obstacle
+# Head height only warns this close. Farther up-and-away readings are mostly overhangs, signs and
+# door frames above the path, and read nearer than they are.
+HEAD_WARN_M = 1.2
 # Low percentile instead of the minimum so a few noisy pixels can't trigger a warning.
 PERCENTILE = 5
 # Lane pixels this close to the obstacle distance count as part of it for the box.
@@ -74,56 +81,76 @@ def _cols(depth: np.ndarray, span: tuple[float, float]) -> slice:
     return slice(int(span[0] * w), int(span[1] * w))
 
 
-def bands_for(mode: str) -> dict[str, tuple[float, float]]:
-    """BANDS cut off at the floor for this mode, dropping any band that starts below it."""
-    cut = FLOOR_CUTOFF[mode]
-    return {h: (top, min(bottom, cut)) for h, (top, bottom) in BANDS.items() if top < cut}
+def obstacle_mask(depth: np.ndarray) -> np.ndarray:
+    """True where a pixel can be an obstacle: everything above GROUND_TOP, and below it only
+    pixels that stick up from the floor of their own row."""
+    mask = np.ones(depth.shape, dtype=bool)
+    ground = _rows(depth, (GROUND_TOP, 1.0))
+    floor = np.percentile(depth[ground], GROUND_REF_PERCENTILE, axis=1, keepdims=True)
+    mask[ground] = depth[ground] < floor * GROUND_RAISE
+    return mask
+
+
+def _cell(depth: np.ndarray, mask: np.ndarray, ys: tuple[float, float], xs: tuple[float, float]) -> float:
+    """Near edge of a lane cell in meters, or infinity if nothing in it can be an obstacle."""
+    rows, cols = _rows(depth, ys), _cols(depth, xs)
+    values = depth[rows, cols][mask[rows, cols]]
+    if values.size < GROUND_MIN_FRACTION * depth[rows, cols].size:
+        return float("inf")
+    return float(np.percentile(values, PERCENTILE))
 
 
 def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
     """Closest lane region within the warning distance, or None if the path is clear."""
+    mask = obstacle_mask(depth)
     best = None
     cells = {}  # (direction, height) -> distance
     for direction, xs in COLUMNS.items():
-        for height, ys in bands_for(mode).items():
-            d = float(np.percentile(depth[_rows(depth, ys), _cols(depth, xs)], PERCENTILE))
+        for height, ys in BANDS.items():
+            d = _cell(depth, mask, ys, xs)
             cells[direction, height] = d
+            if height == "head" and d > HEAD_WARN_M:
+                continue
             if best is None or d < best["distance"]:
                 best = {"distance": d, "direction": direction, "height": height}
-    if best["distance"] > WARN_DISTANCE_M[mode]:
+    if best is None or best["distance"] > WARN_DISTANCE_M[mode]:
         return None
+    # Ahead wins unless the side is clearly nearer, comparing each column's own nearest reading
+    # (head only counts within HEAD_WARN_M, same as above).
+    nearest = {
+        c: min(d for (col, h), d in cells.items() if col == c and (h != "head" or d <= HEAD_WARN_M))
+        for c in COLUMNS
+    }
+    if nearest["ahead"] - nearest[best["direction"]] <= SIDE_MARGIN_M:
+        best["direction"] = "ahead"
     if cells[best["direction"], "waist"] - best["distance"] <= BAND_MARGIN_M:
         best["height"] = "waist"
-    # Compare with straight ahead at the same height, so the floor in the foot band doesn't
-    # drown out a chair on the left at waist height.
-    if cells["ahead", best["height"]] - best["distance"] <= SIDE_MARGIN_M:
-        best["direction"] = "ahead"
     best["open"] = open_side(cells, best, mode)
-    best["box"] = _box(depth, best["distance"], mode)
+    best["box"] = _box(depth, mask, best["distance"])
     return best
 
 
 def open_side(cells: dict, best: dict, mode: str) -> str | None:
     """The side column with nothing inside the warning distance, or None.
 
-    Only a narrow strip of the frame and nothing below the floor cutoff, so it's phrased as
+    Only a narrow strip of the frame and only what sticks up from the floor, so it's phrased as
     "more room", never "clear": it must not read as permission to step that way.
     """
     room = {}
     for side in ("left", "right"):
         if side != best["direction"]:
-            room[side] = min(cells[side, h] for h in bands_for(mode))
+            room[side] = min(cells[side, h] for h in BANDS)
     if not room:
         return None
     side = max(room, key=room.get)
     return side if room[side] > WARN_DISTANCE_M[mode] else None
 
 
-def _box(depth: np.ndarray, distance: float, mode: str) -> list[float] | None:
+def _box(depth: np.ndarray, mask: np.ndarray, distance: float) -> list[float] | None:
     """Bounding box of lane pixels within BOX_MARGIN_M of the obstacle, as x, y, width, height fractions."""
     h, w = depth.shape
-    ys, xs = _rows(depth, (BANDS["head"][0], FLOOR_CUTOFF[mode])), _cols(depth, LANE_X)
-    rows, cols = np.nonzero(depth[ys, xs] <= distance + BOX_MARGIN_M)
+    ys, xs = _rows(depth, (BANDS["head"][0], 1.0)), _cols(depth, LANE_X)
+    rows, cols = np.nonzero((depth[ys, xs] <= distance + BOX_MARGIN_M) & mask[ys, xs])
     if rows.size == 0:
         return None
     x0, x1 = (cols.min() + xs.start) / w, (cols.max() + 1 + xs.start) / w
