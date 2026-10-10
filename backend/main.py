@@ -15,13 +15,24 @@ load_dotenv()
 app = FastAPI(title="Obstacle Alert API")
 
 
+# The models shrink everything to about 500 px, so anything bigger only costs decode time.
+MAX_IMAGE_PX = 1280
+
+
+def decode_image(data: bytes) -> Image.Image:
+    img = Image.open(io.BytesIO(data))
+    img.draft("RGB", (MAX_IMAGE_PX, MAX_IMAGE_PX))  # JPEG decodes straight to a smaller size
+    # Phone photos can be stored sideways with a rotation tag. Apply it so up is up.
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    img.thumbnail((MAX_IMAGE_PX, MAX_IMAGE_PX))
+    return img
+
+
 async def read_image(image: UploadFile, mode: str) -> Image.Image:
     if mode not in ("indoor", "outdoor"):
         raise HTTPException(400, "mode must be indoor or outdoor")
     try:
-        img = Image.open(io.BytesIO(await image.read()))
-        # Phone photos can be stored sideways with a rotation tag. Apply it so up is up.
-        return ImageOps.exif_transpose(img).convert("RGB")
+        return await run_in_threadpool(decode_image, await image.read())
     except UnidentifiedImageError:
         raise HTTPException(400, "image must be a photo")
 
@@ -35,7 +46,8 @@ def health():
 async def describe(
     image: UploadFile = File(...), mode: str = Form("indoor"), voice_id: str | None = Form(None)
 ):
-    result = pipeline.describe(await read_image(image, mode), mode)
+    # Models run in a worker thread so a sonar frame and a tap don't wait on each other.
+    result = await run_in_threadpool(pipeline.describe, await read_image(image, mode), mode)
     # Null if ElevenLabs is unavailable, so the app speaks the sentence with expo-speech.
     result["audio_b64"] = await run_in_threadpool(voice.speak_b64, result["sentence"], voice_id)
     return result
@@ -79,7 +91,7 @@ async def voice_sample(voice_id: str):
 
 @app.post("/sonar")
 async def sonar(image: UploadFile = File(...), mode: str = Form("indoor")):
-    return pipeline.sonar(await read_image(image, mode), mode)
+    return await run_in_threadpool(pipeline.sonar, await read_image(image, mode), mode)
 
 
 if __name__ == "__main__":

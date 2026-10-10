@@ -10,6 +10,7 @@ import {
   useAudioRecorder,
 } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -71,6 +72,17 @@ function majority(items: Side[]): Side {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// The models shrink every photo to about 500 px, so a full-size photo (1 to 2 MB) only makes the
+// upload slow, which is what you feel outside on weak Wi-Fi or mobile data.
+const DESCRIBE_WIDTH_PX = 768;
+const SONAR_WIDTH_PX = 384;
+
+async function shrink(uri: string, width: number): Promise<string> {
+  const image = await ImageManipulator.manipulate(uri).resize({ width }).renderAsync();
+  const saved = await image.saveAsync({ format: SaveFormat.JPEG, compress: 0.7 });
+  return saved.uri;
+}
 
 // Beeps speed up as the obstacle gets closer: slow at the warning distance, rapid at half a meter.
 function beepGapMs(distance: number, mode: Mode) {
@@ -359,7 +371,7 @@ export default function App() {
           const photo = await cameraRef.current?.takePictureAsync({ quality: 0.1, shutterSound: false });
           if (!photo) throw new Error('No photo');
           const form = new FormData();
-          form.append('image', new File(photo.uri));
+          form.append('image', new File(await shrink(photo.uri, SONAR_WIDTH_PX)));
           form.append('mode', modeRef.current);
           const res = await fetch(`${API_URL}/sonar`, { method: 'POST', body: form, headers: HEADERS });
           if (!res.ok) throw new Error(`Server ${res.status}`);
@@ -453,7 +465,7 @@ export default function App() {
       setStatus('thinking');
       const form = new FormData();
       // Expo's fetch rejects React Native's old { uri, name, type } parts; it needs a real File.
-      form.append('image', new File(photo.uri));
+      form.append('image', new File(await shrink(photo.uri, DESCRIBE_WIDTH_PX)));
       form.append('mode', mode);
       if (voiceIdRef.current) form.append('voice_id', voiceIdRef.current);
 
