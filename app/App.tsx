@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { setAudioModeAsync } from 'expo-audio';
+import { File } from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 
@@ -65,8 +66,8 @@ export default function App() {
 
       setStatus('thinking');
       const form = new FormData();
-      // React Native's fetch uploads a file from { uri, name, type }.
-      form.append('image', { uri: photo.uri, name: 'frame.jpg', type: 'image/jpeg' } as any);
+      // Expo's fetch rejects React Native's old { uri, name, type } parts; it needs a real File.
+      form.append('image', new File(photo.uri));
       form.append('mode', mode);
 
       const res = await fetch(`${API_URL}/describe`, {
