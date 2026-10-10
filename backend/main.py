@@ -1,4 +1,6 @@
 import io
+import time
+from collections import deque
 
 import requests
 import uvicorn
@@ -104,6 +106,38 @@ async def find(
     if target is None:
         raise HTTPException(400, f"name one of: {', '.join(pipeline.FIND_TARGETS)}")
     return await run_in_threadpool(pipeline.find, await read_image(image, mode), mode, target, description)
+
+
+# A spoken Find request is a few seconds. Both limits keep the public Space from being a free
+# transcription service on the ElevenLabs credits.
+TRANSCRIBE_MAX_BYTES = 500_000
+TRANSCRIBE_PER_MINUTE = 20
+_transcribe_times: deque[float] = deque()
+
+
+@app.post("/transcribe")
+async def transcribe(audio: UploadFile = File(...)):
+    """Spoken Find request ("find the red bench") -> text, target, and description for /find."""
+    data = await audio.read()
+    if not data or len(data) > TRANSCRIBE_MAX_BYTES:
+        raise HTTPException(400, "send a short recording (a few seconds)")
+    now = time.monotonic()
+    while _transcribe_times and now - _transcribe_times[0] > 60:
+        _transcribe_times.popleft()
+    if len(_transcribe_times) >= TRANSCRIBE_PER_MINUTE:
+        raise HTTPException(429, "too many requests, try again in a minute")
+    _transcribe_times.append(now)
+    try:
+        text = await run_in_threadpool(
+            voice.transcribe, data, audio.filename or "request.m4a", audio.content_type or "audio/m4a"
+        )
+    except requests.HTTPError as e:
+        detail = e.response.text[:300] if e.response is not None else str(e)
+        raise HTTPException(502, f"ElevenLabs speech-to-text refused: {detail}")
+    except requests.RequestException as e:
+        raise HTTPException(502, f"ElevenLabs unreachable: {e}")
+    target, description = pipeline.parse_request(text)
+    return {"text": text, "target": target, "description": description}
 
 
 @app.get("/voices")

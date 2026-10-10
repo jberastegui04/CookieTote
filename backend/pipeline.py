@@ -283,6 +283,36 @@ def target_from(target: str | None, description: str | None) -> str | None:
     return None
 
 
+# Spoken requests come wrapped in filler ("can you find me the ... please"). Dropped from the ends so
+# the description is just the thing, which is what SigLIP matches best.
+REQUEST_LEAD = (
+    "please", "hey", "ok", "okay", "can you", "could you", "help me", "i want to", "i need to", "i want", "i need",
+    "find me", "find", "look for", "looking for", "search for", "where is", "where's", "show me", "take me to",
+    "the", "a", "an", "my", "some",
+)
+REQUEST_TAIL = ("please", "for me", "thanks", "thank you")
+
+
+def parse_request(text: str) -> tuple[str | None, str | None]:
+    """(target, description) from a spoken request like "find me the red bench please"."""
+    words = "".join(c if c.isalnum() or c in " '" else " " for c in text.lower()).split()
+    changed = True
+    while changed and words:
+        changed = False
+        for phrase in REQUEST_LEAD:
+            p = phrase.split()
+            if words[: len(p)] == p:
+                words, changed = words[len(p):], True
+                break
+        for phrase in REQUEST_TAIL:
+            p = phrase.split()
+            if len(words) > len(p) and words[-len(p):] == p:
+                words, changed = words[: -len(p)], True
+                break
+    description = " ".join(words)[:DESCRIPTION_MAX_CHARS] or None
+    return target_from(None, description), description
+
+
 def _match_scores(crops: list[Image.Image], description: str) -> list[float]:
     processor, model = _match_model()
     inputs = processor(text=[f"a photo of a {description}"], images=crops, padding="max_length", return_tensors="pt")

@@ -91,6 +91,10 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `sentence` | string | what to say, e.g. "Chair, slightly right, about 3 meters." or "No chair yet. Turn slowly." |
 | `obstacle` | object | the same fields as `/sonar`; a "Stop" from it wins over Find |
 
+### POST /transcribe
+
+Spoken Find request to text (ElevenLabs speech-to-text, `scribe_v2`). Form upload: `audio`, a recording of a few seconds (m4a or wav, under 500 KB). Returns `{"text": "Find the red bench.", "target": "bench", "description": "red bench"}`: filler like "can you find me the … please" is dropped, and `target` is null when the request names nothing Find knows (for example "door"), so the app can say so. Then call `/find` with that `target` and `description`. Limited to 20 requests a minute so the public Space can't be used as a free transcription service. 502 if ElevenLabs refuses; the API key needs the **Speech to Text** permission.
+
 ### GET /find/targets
 
 `{"targets": ["chair", "bench", …]}`, the list the picker shows. Only objects the current detector reliably finds; doors and trash cans need an open-vocabulary model (Stage 2).

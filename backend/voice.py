@@ -133,3 +133,20 @@ def speak_wav(sentence: str, voice_id: str | None = None) -> bytes | None:
 def speak_b64(sentence: str, voice_id: str | None = None) -> str | None:
     wav = speak_wav(sentence, voice_id)
     return base64.b64encode(wav).decode() if wav else None
+
+
+# Speech to text for "find the red bench" (Michael). The key needs the Speech to Text permission.
+STT_MODEL_ID = "scribe_v2"
+
+
+def transcribe(audio: bytes, filename: str, content_type: str) -> str:
+    """Text of a short spoken request. Raises requests exceptions on failure."""
+    res = requests.post(
+        "https://api.elevenlabs.io/v1/speech-to-text",
+        headers=_headers(),
+        data={"model_id": STT_MODEL_ID},
+        files={"file": (filename, audio, content_type)},
+        timeout=15,
+    )
+    res.raise_for_status()
+    return (res.json().get("text") or "").strip()
