@@ -27,9 +27,9 @@ LANE_Y = (0.0, 0.75)
 PERCENTILE = 5
 # Lane pixels this close to the obstacle distance count as part of it for the box.
 BOX_MARGIN_M = 0.3
-# A side only wins if it is this much closer than straight ahead. Without it, a flat wall
-# flips between left and right because the three columns differ by a few centimeters of noise.
-SIDE_MARGIN_M = 0.25
+# A side only wins if it is this much closer than straight ahead in the same band. Without it,
+# a flat wall flips between left and right because the columns differ by a few centimeters of noise.
+SIDE_MARGIN_M = 0.15
 # The model reads phone photos too far away. Multiply by this to get real meters.
 # 1.0 until we calibrate against photos taken at measured distances.
 DEPTH_SCALE = {"indoor": 1.0, "outdoor": 1.0}
@@ -66,16 +66,18 @@ def _cols(depth: np.ndarray, span: tuple[float, float]) -> slice:
 def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
     """Closest lane region within the warning distance, or None if the path is clear."""
     best = None
-    closest = {}  # nearest distance per column, across the three bands
+    cells = {}  # (direction, height) -> distance
     for direction, xs in COLUMNS.items():
         for height, ys in BANDS.items():
             d = float(np.percentile(depth[_rows(depth, ys), _cols(depth, xs)], PERCENTILE))
-            closest[direction] = min(d, closest.get(direction, d))
+            cells[direction, height] = d
             if best is None or d < best["distance"]:
                 best = {"distance": d, "direction": direction, "height": height}
     if best["distance"] > WARN_DISTANCE_M[mode]:
         return None
-    if closest["ahead"] - best["distance"] <= SIDE_MARGIN_M:
+    # Compare with straight ahead at the same height, so the floor in the foot band doesn't
+    # drown out a chair on the left at waist height.
+    if cells["ahead", best["height"]] - best["distance"] <= SIDE_MARGIN_M:
         best["direction"] = "ahead"
     best["box"] = _box(depth, best["distance"])
     return best

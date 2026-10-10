@@ -21,7 +21,7 @@ type DescribeResult = {
   direction: 'left' | 'ahead' | 'right' | null;
   height: 'foot' | 'waist' | 'head' | null;
   box: [number, number, number, number] | null;
-  audio_b64: string | null;
+  audio_b64: string | null; // WAV, base64
 };
 
 // Matches POST /sonar in the README.
@@ -100,8 +100,10 @@ export default function App() {
   async function say(data: DescribeResult) {
     if (data.audio_b64) {
       try {
-        // The player needs a file, so save the mp3 to the cache folder first.
-        const clip = new File(Paths.cache, `warning-${Date.now()}.mp3`);
+        // The player needs a file, so save the clip to the cache folder first. The backend sends
+        // WAV (base64 starts with "UklGR", which is "RIFF"); older backends sent mp3.
+        const ext = data.audio_b64.startsWith('UklGR') ? 'wav' : 'mp3';
+        const clip = new File(Paths.cache, `warning-${Date.now()}.${ext}`);
         clip.write(data.audio_b64, { encoding: 'base64' });
         player.replace({ uri: clip.uri });
         // Starting before the clip has loaded cuts off the first word.

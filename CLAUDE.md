@@ -17,7 +17,7 @@ Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and l
 ## API contract (keep app, backend, and README in sync; do not change field names)
 Both endpoints: POST multipart with `image` (photo) and `mode` ("indoor" | "outdoor", defaults to indoor).
 
-`POST /describe` returns `clear` (boolean), `sentence` (string), `label` (string | null), `distance_m` (number rounded to 0.5 | null), `direction` ("left" | "ahead" | "right" | null), `height` ("foot" | "waist" | "head" | null), `box` ([x, y, width, height], each 0 to 1 of the image | null), `audio_b64` (base64 ElevenLabs mp3 | null; when null the app uses expo-speech). `main.py` adds `audio_b64`; the pipeline returns the rest.
+`POST /describe` returns `clear` (boolean), `sentence` (string), `label` (string | null), `distance_m` (number rounded to 0.5 | null), `direction` ("left" | "ahead" | "right" | null), `height` ("foot" | "waist" | "head" | null), `box` ([x, y, width, height], each 0 to 1 of the image | null), `audio_b64` (base64 ElevenLabs WAV | null; when null the app uses expo-speech). `main.py` adds `audio_b64`; the pipeline returns the rest.
 
 `POST /sonar` returns `clear`, `distance_m`, `direction` only.
 

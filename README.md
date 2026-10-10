@@ -55,7 +55,7 @@ Full result for describe mode. Slower, called once per tap.
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `height` | string or null | `foot`, `waist`, or `head` |
 | `box` | list of 4 numbers or null | obstacle outline for the overlay, as x, y, width, height in 0 to 1 of the image |
-| `audio_b64` | string or null | ElevenLabs mp3 of the sentence, base64. Null if the key is missing or ElevenLabs fails, so the app falls back to expo-speech |
+| `audio_b64` | string or null | ElevenLabs WAV of the sentence (16 kHz mono, short silence at both ends), base64. Null if the key is missing or ElevenLabs fails, so the app falls back to expo-speech |
 
 ### POST /sonar
 
