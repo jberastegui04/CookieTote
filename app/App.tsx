@@ -150,6 +150,22 @@ const clockPhrase = (target: string, offsetDeg: number, openVocab: boolean) => {
 const wrapDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-180, 180]
 // Each gyro reading moves the heading this fraction of the way to the new value (1 = no smoothing).
 const HEADING_SMOOTHING = 0.5;
+// Find runs in two phases. SEARCH: standing still and turning; only the target is spoken, and
+// obstacles are ignored (false "Stop"s while turning on the spot were confusing). APPROACH: walking
+// toward it; "Stop" wins, then target drift, then nearby obstacles. Phrases are on the /say list.
+type FindPhase = 'search' | 'approach';
+const HANDOFF_PHRASE = "Got it. Walk toward it. I'll warn you about anything in the way.";
+const LOST_PHRASE = 'Lost it. Stop and turn slowly.';
+const STAND_STILL_PHRASE = 'Stand still while I look.';
+const HANDOFF_CENTERED_MS = 1000; // facing it this long (and seen recently) hands off to Approach
+const HANDOFF_SEEN_WITHIN_MS = 3000;
+const APPROACH_DRIFT_MS = 2000; // how often the drift sentence may repeat
+const APPROACH_REMIND_MS = 2000;
+const LOST_AFTER_MS = 4000; // not seen this long, and out of view: back to Search
+// Walking detection in Search (user acceleration, gravity removed): a smoothed level above this
+// for a second means they're walking, and the app asks them to stand still, once.
+const WALK_LEVEL = 0.5;
+const WALK_SUSTAIN_MS = 1000;
 // Centered and this close: you've arrived. Find stops and says to reach forward.
 const ARRIVE_DISTANCE_M = 0.7;
 const arrivalPhrase = (target: string, openVocab: boolean) =>
@@ -298,6 +314,14 @@ export default function App() {
   const [headingNow, setHeadingNow] = useState<number | null>(null); // same, as state, so the screen follows the turn
   const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
   const findMisses = useRef(0);
+  const findPhaseRef = useRef<FindPhase>('search');
+  const lastFoundAt = useRef(0); // when the target was last in a frame
+  const lastSentence = useRef<string | null>(null); // last server sentence with the target in view
+  const centeredSince = useRef<number | null>(null);
+  const lastDriftAt = useRef(0);
+  const walkLevel = useRef(0);
+  const movingSince = useRef<number | null>(null);
+  const saidStandStill = useRef(false);
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
@@ -867,6 +891,14 @@ export default function App() {
     targetHeadingRef.current = null;
     findMisses.current = 0;
     findBlanks.current = 0;
+    findPhaseRef.current = 'search';
+    lastFoundAt.current = 0;
+    lastSentence.current = null;
+    centeredSince.current = null;
+    lastDriftAt.current = 0;
+    walkLevel.current = 0;
+    movingSince.current = null;
+    saidStandStill.current = false;
     startHeading();
     frameLoop(
       () => findOnRef.current,
@@ -878,9 +910,46 @@ export default function App() {
     voiceLoop();
     pulseLoop();
     const open = findOpenVocabRef.current;
-    fetchPhrase(open ? 'No match yet. Turn slowly.' : `No ${target} yet. Turn slowly.`).then(() =>
-      fetchPhrase(arrivalPhrase(target, open)),
-    );
+    fetchPhrase(open ? 'No match yet. Turn slowly.' : `No ${target} yet. Turn slowly.`)
+      .then(() => fetchPhrase(HANDOFF_PHRASE))
+      .then(() => fetchPhrase(arrivalPhrase(target, open)))
+      .then(() => fetchPhrase(LOST_PHRASE))
+      .then(() => fetchPhrase(STAND_STILL_PHRASE));
+  }
+
+  // Search -> Approach: facing the target. Said once, with a double pulse.
+  function handoff() {
+    findPhaseRef.current = 'approach';
+    centeredSince.current = null;
+    lastDriftAt.current = Date.now();
+    interruptForStop({ key: 'handoff', text: HANDOFF_PHRASE, stop: true });
+    situation.current = { key: 'handoff', text: HANDOFF_PHRASE, stop: false };
+    buzz(Haptics.ImpactFeedbackStyle.Heavy);
+    setTimeout(() => buzz(Haptics.ImpactFeedbackStyle.Heavy), 160);
+  }
+
+  // Approach -> Search: not seen for a while and out of view.
+  function lost() {
+    findPhaseRef.current = 'search';
+    targetHeadingRef.current = null;
+    lastFoundAt.current = 0;
+    lastSentence.current = null;
+    centeredSince.current = null;
+    findBlanks.current = 0;
+    saidStandStill.current = false;
+    situation.current = { key: 'lost', text: LOST_PHRASE, stop: false };
+  }
+
+  // The last server sentence ("Door, slightly left, about 2 meters.") with its direction replaced by
+  // where the target is now, from the gyro. Keeps the server's exact distance wording, so the
+  // result is still on the /say list.
+  function driftSentence(off: number): string | null {
+    const base = lastSentence.current;
+    if (!base) return null;
+    const parts = base.slice(0, -1).split(', ');
+    if (parts.length !== 3) return base;
+    const where = Math.abs(off) <= FIND_AHEAD_DEG ? 'ahead' : off > 0 ? 'slightly right' : 'slightly left';
+    return `${parts[0]}, ${where}, ${parts[2]}.`;
   }
 
   // Tap, say "find the red bench", done. Records for 3 seconds, sends it to /transcribe, and
@@ -938,6 +1007,12 @@ export default function App() {
       // 20 readings a second; FindScreen glides the box between them so it moves smoothly.
       DeviceMotion.setUpdateInterval(50);
       motionSub.current = DeviceMotion.addListener((m) => {
+        if (m.acceleration) {
+          const g = Math.hypot(m.acceleration.x, m.acceleration.y, m.acceleration.z);
+          walkLevel.current = walkLevel.current * 0.85 + g * 0.15;
+          if (walkLevel.current > WALK_LEVEL) movingSince.current ??= Date.now();
+          else movingSince.current = null;
+        }
         if (m.rotation) {
           const raw = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
           const prev = headingRef.current;
@@ -965,11 +1040,37 @@ export default function App() {
     return wrapDeg(targetHeadingRef.current - headingRef.current);
   }
 
-  // Haptics from the gyro, several times a second: stronger and faster as you turn toward the
-  // target, a double pulse when you're facing it. Runs until Find stops.
+  // Runs several times a second until Find stops. Haptics from the gyro (stronger and faster as
+  // you turn toward the target, double pulse when facing it), and the phase rules that need to
+  // react between server answers: hand-off, "stand still", drift, and lost.
   async function pulseLoop() {
     while (findOnRef.current) {
       const off = targetOffset();
+      const now = Date.now();
+      if (findPhaseRef.current === 'search') {
+        if (!saidStandStill.current && movingSince.current !== null && now - movingSince.current > WALK_SUSTAIN_MS) {
+          saidStandStill.current = true;
+          situation.current = { key: 'standstill', text: STAND_STILL_PHRASE, stop: false };
+        }
+        const seenRecently = now - lastFoundAt.current <= HANDOFF_SEEN_WITHIN_MS;
+        if (off !== null && seenRecently && Math.abs(off) <= FIND_AHEAD_DEG) {
+          centeredSince.current ??= now;
+          if (now - centeredSince.current >= HANDOFF_CENTERED_MS) handoff();
+        } else {
+          centeredSince.current = null;
+        }
+      } else {
+        if (now - lastFoundAt.current > LOST_AFTER_MS && (off === null || Math.abs(off) > CAMERA_HALF_FOV_DEG)) {
+          lost();
+        } else if (off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS) {
+          // Drifted off the target: say where it is now, from the gyro, without waiting for a frame.
+          const text = driftSentence(off);
+          if (text && !(situation.current?.stop)) {
+            lastDriftAt.current = now;
+            situation.current = { key: `drift:${off > 0 ? 'right' : 'left'}:${now}`, text, stop: false };
+          }
+        }
+      }
       if (off === null) {
         await sleep(200);
         continue;
@@ -1004,6 +1105,7 @@ export default function App() {
   function stopFind(announce = true) {
     findOnRef.current = false;
     setFindOn(false);
+    findPhaseRef.current = 'search';
     stopHeading();
     situation.current = null;
     setFindInfo(null);
@@ -1114,35 +1216,50 @@ export default function App() {
 
   function applyFind(data: FindResult, headingAtCapture: number | null) {
     const target = findTargetRef.current ?? data.target;
+    const phase = findPhaseRef.current;
     findBlanks.current = data.found ? 0 : findBlanks.current + 1;
-    if (data.found && data.bearing_deg !== null && headingAtCapture !== null) {
+    if (data.found && data.bearing_deg !== null) {
+      lastFoundAt.current = Date.now();
+      lastSentence.current = data.sentence;
       // Remember which way the phone pointed, even if an obstacle takes the sentence below.
-      targetHeadingRef.current = wrapDeg(headingAtCapture + data.bearing_deg);
+      if (headingAtCapture !== null) targetHeadingRef.current = wrapDeg(headingAtCapture + data.bearing_deg);
     }
-    // An obstacle in the way wins over the target: "Stop" interrupts, "close" just takes the next
-    // turn to speak, so you can step around it and let the clock point you back.
+    // Obstacles only matter in Approach: in Search you're standing still and turning, and the
+    // warnings were noise. "Stop" interrupts; "close" takes the next turn to speak.
     const o = data.obstacle;
     const danger =
-      !o.clear && o.distance_m !== null
+      phase === 'approach' && !o.clear && o.distance_m !== null
         ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
         : null;
-    if (danger && (danger.stop || danger.key.startsWith('close'))) {
+    if (danger?.stop) {
       setFindInfo(data);
       interruptForStop(danger);
       situation.current = danger;
-      if (danger.stop) buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      buzz(Haptics.ImpactFeedbackStyle.Heavy);
       return;
     }
     if (data.found && data.bearing_deg !== null) {
-      // Seen: remember which way the phone pointed, plus where in the frame it was.
       findMisses.current = 0;
-      if (headingAtCapture !== null) targetHeadingRef.current = wrapDeg(headingAtCapture + data.bearing_deg);
       setFindInfo(data);
       if (data.centered && data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M) {
         arrive(target);
         return;
       }
-      situation.current = { key: data.sentence, text: data.sentence, stop: false };
+      if (phase === 'approach') {
+        const off = targetOffset() ?? data.bearing_deg;
+        if (Math.abs(off) > FIND_AHEAD_DEG) {
+          // Drift wins over nearby obstacles; the live direction comes from the gyro.
+          const text = driftSentence(off) ?? data.sentence;
+          lastDriftAt.current = Date.now();
+          situation.current = { key: `drift:${off > 0 ? 'right' : 'left'}`, text, stop: false };
+        } else if (danger && danger.key.startsWith('close')) {
+          situation.current = danger;
+        } else {
+          situation.current = { key: data.sentence, text: data.sentence, stop: false };
+        }
+      } else {
+        situation.current = { key: data.sentence, text: data.sentence, stop: false };
+      }
       // No gyro: pulse from the frame instead.
       if (headingRef.current === null) {
         const off = Math.abs(data.bearing_deg);
@@ -1157,8 +1274,14 @@ export default function App() {
       }
       return;
     }
-    // Not in this frame. If we know where it was, guide by the gyro: clock position, and the
-    // screen's arrow and meter follow the remembered direction.
+    // Not in this frame. A nearby obstacle while walking still gets said.
+    if (danger && danger.key.startsWith('close')) {
+      setFindInfo(data);
+      situation.current = danger;
+      return;
+    }
+    // If we know where it was, guide by the gyro: clock position, and the screen's arrow and
+    // meter follow the remembered direction.
     const off = targetOffset();
     if (off !== null) {
       if (Math.abs(off) <= CAMERA_HALF_FOV_DEG) {
@@ -1230,7 +1353,9 @@ export default function App() {
             skipProcessing: GUIDE_SKIP_PROCESSING,
           });
           if (!photo) throw new Error('No photo');
-          const sharp = findOnRef.current && findBlanks.current >= FIND_BLANKS_FOR_SHARP;
+          // Sharper frames only in Search; in Approach the target is near and speed matters.
+          const sharp =
+            findOnRef.current && findPhaseRef.current === 'search' && findBlanks.current >= FIND_BLANKS_FOR_SHARP;
           uri = await shrink(photo.uri, sharp ? FIND_SHARP_WIDTH_PX : SONAR_WIDTH_PX);
         } catch (e) {
           console.warn(e);
@@ -1282,11 +1407,14 @@ export default function App() {
       }
       const changed = s.key !== lastKey;
       const remindAfter = findOnRef.current
-        ? FIND_REMIND_MS
+        ? findPhaseRef.current === 'approach'
+          ? APPROACH_REMIND_MS
+          : FIND_REMIND_MS
         : s.key.startsWith('far')
           ? GUIDE_REMIND_MS
           : GUIDE_REMIND_CLOSE_MS;
-      const remind = s.key !== OPEN.key && Date.now() - lastSpokenAt > remindAfter;
+      const oneShot = s.key === 'handoff' || s.key === 'lost' || s.key === 'standstill';
+      const remind = s.key !== OPEN.key && !oneShot && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
         await sleep(100);
         continue;
