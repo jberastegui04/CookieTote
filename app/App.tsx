@@ -248,6 +248,7 @@ export default function App() {
   const findOnRef = useRef(false);
   const findTargetRef = useRef<string | null>(null);
   const headingRef = useRef<number | null>(null); // phone heading in degrees, clockwise, from the gyro
+  const [headingNow, setHeadingNow] = useState<number | null>(null); // same, as state, so the screen follows the turn
   const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
   const findMisses = useRef(0);
   const motionSub = useRef<{ remove: () => void } | null>(null);
@@ -775,7 +776,10 @@ export default function App() {
       if (!(await DeviceMotion.isAvailableAsync())) return;
       DeviceMotion.setUpdateInterval(100);
       motionSub.current = DeviceMotion.addListener((m) => {
-        if (m.rotation) headingRef.current = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
+        if (m.rotation) {
+          headingRef.current = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
+          setHeadingNow(headingRef.current);
+        }
       });
     } catch (e) {
       console.warn(e);
@@ -786,6 +790,7 @@ export default function App() {
     motionSub.current?.remove();
     motionSub.current = null;
     headingRef.current = null;
+    setHeadingNow(null);
     targetHeadingRef.current = null;
   }
 
@@ -1169,10 +1174,28 @@ export default function App() {
   }
 
   const busy = status === 'thinking' || status === 'capturing';
+  // The last /find answer is a second or so old. Between answers, move its bearing, direction and
+  // box by how much the phone has turned since that frame was captured (the gyro), so the outline
+  // stays on the object and the arrow points the right way while the user turns.
+  let liveFind = findInfo;
+  const targetHeading = targetHeadingRef.current;
+  if (findOn && findInfo && findInfo.bearing_deg !== null && targetHeading !== null && headingNow !== null) {
+    const off = wrapDeg(targetHeading - headingNow);
+    const shift = (off - findInfo.bearing_deg) / (2 * CAMERA_HALF_FOV_DEG); // fraction of the frame width
+    const inView = Math.abs(off) <= CAMERA_HALF_FOV_DEG;
+    liveFind = {
+      ...findInfo,
+      bearing_deg: Math.max(-CAMERA_HALF_FOV_DEG, Math.min(CAMERA_HALF_FOV_DEG, off)),
+      direction: Math.abs(off) <= FIND_AHEAD_DEG ? 'ahead' : off > 0 ? 'right' : 'left',
+      centered: Math.abs(off) <= 5,
+      box: inView && findInfo.box ? [findInfo.box[0] + shift, findInfo.box[1], findInfo.box[2], findInfo.box[3]] : null,
+    };
+  }
+
   const found = !guideOn && !findOn && resultVisible && result != null && !result.clear ? result : null;
   const distance = findOn ? (findInfo?.distance_m ?? null) : guideOn ? guideDistance : (found?.distance_m ?? null);
   const showNumber = !busy && status !== 'error' && distance != null;
-  const direction = findOn ? (findInfo?.direction ?? null) : guideOn ? guideSide : (found?.direction ?? null);
+  const direction = findOn ? (liveFind?.direction ?? null) : guideOn ? guideSide : (found?.direction ?? null);
 
   const headline = busy
     ? 'Checking…'
@@ -1208,7 +1231,7 @@ export default function App() {
 
   // Where the obstacle (or find target) box lands on screen: the 3:4 photo is scaled to cover the screen.
   let box: { left: number; top: number; width: number; height: number } | null = null;
-  const shownBox = findOn ? (findInfo?.box ?? null) : found?.box;
+  const shownBox = findOn ? (liveFind?.box ?? null) : found?.box;
   if (shownBox && !busy) {
     const [x, y, w, h] = shownBox;
     const scale = Math.max(screenW / PHOTO_ASPECT, screenH); // displayed photo height
@@ -1320,7 +1343,7 @@ export default function App() {
       />
 
       {findOn && findTarget ? (
-        <FindScreen target={findTarget} result={findInfo} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
+        <FindScreen target={findTarget} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
       ) : cameraPicture ? (
         <>
           {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}
