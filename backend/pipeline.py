@@ -14,6 +14,14 @@ from transformers import pipeline as hf_pipeline
 
 # Warn further out outdoors since people walk faster.
 WARN_DISTANCE_M = {"indoor": 2.0, "outdoor": 4.0}
+# The "Warn me" setting scales that: indoors 1.5 / 2 / 3 m, outdoors 3 / 4 / 6 m.
+WARNING_SCALE = {"close": 0.75, "normal": 1.0, "early": 1.5}
+UNITS = ("meters", "feet")
+FEET_PER_METER = 3.28084
+
+
+def warn_distance(mode: str, warning: str = "normal") -> float:
+    return WARN_DISTANCE_M[mode] * WARNING_SCALE[warning]
 
 DEPTH_MODELS = {
     "indoor": "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
@@ -112,7 +120,7 @@ def _cell(depth: np.ndarray, mask: np.ndarray, ys: tuple[float, float], xs: tupl
     return float(np.percentile(values, PERCENTILE))
 
 
-def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
+def find_obstacle(depth: np.ndarray, warn_m: float) -> dict | None:
     """Closest lane region within the warning distance, or None if the path is clear."""
     mask = obstacle_mask(depth)
     best = None
@@ -125,7 +133,7 @@ def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
                 continue
             if best is None or d < best["distance"]:
                 best = {"distance": d, "direction": direction, "height": height}
-    if best is None or best["distance"] > WARN_DISTANCE_M[mode]:
+    if best is None or best["distance"] > warn_m:
         return None
     # Ahead wins unless the side is clearly nearer, comparing each column's own nearest reading
     # (head only counts within HEAD_WARN_M, same as above).
@@ -137,12 +145,12 @@ def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
         best["direction"] = "ahead"
     if cells[best["direction"], "waist"] - best["distance"] <= BAND_MARGIN_M:
         best["height"] = "waist"
-    best["open"] = open_side(cells, best, mode)
+    best["open"] = open_side(cells, best, warn_m)
     best["box"] = _box(depth, mask, best["distance"])
     return best
 
 
-def open_side(cells: dict, best: dict, mode: str) -> str | None:
+def open_side(cells: dict, best: dict, warn_m: float) -> str | None:
     """The side column with nothing inside the warning distance, or None.
 
     Only a narrow strip of the frame and only what sticks up from the floor, so it's phrased as
@@ -155,7 +163,7 @@ def open_side(cells: dict, best: dict, mode: str) -> str | None:
     if not room:
         return None
     side = max(room, key=room.get)
-    return side if room[side] > WARN_DISTANCE_M[mode] else None
+    return side if room[side] > warn_m else None
 
 
 def _box(depth: np.ndarray, mask: np.ndarray, distance: float) -> list[float] | None:
@@ -195,13 +203,13 @@ def round_half(meters: float) -> float:
     return max(0.5, round(meters * 2) / 2)
 
 
-def describe(image: Image.Image, mode: str) -> dict:
+def describe(image: Image.Image, mode: str, warning: str = "normal", units: str = "meters") -> dict:
     depth = depth_map(image, mode)
-    hit = find_obstacle(depth, mode)
+    hit = find_obstacle(depth, warn_distance(mode, warning))
     if hit is None:
         return {
             "clear": True,
-            "sentence": to_sentence(None, None, None, None),
+            "sentence": to_sentence(None, None, None, None, units=units),
             "label": None,
             "distance_m": None,
             "direction": None,
@@ -214,7 +222,7 @@ def describe(image: Image.Image, mode: str) -> dict:
     distance_m = round_half(hit["distance"])
     return {
         "clear": False,
-        "sentence": to_sentence(label, distance_m, hit["direction"], hit["height"], hit["open"]),
+        "sentence": to_sentence(label, distance_m, hit["direction"], hit["height"], hit["open"], units),
         "label": label,
         "distance_m": distance_m,
         "direction": hit["direction"],
@@ -224,12 +232,12 @@ def describe(image: Image.Image, mode: str) -> dict:
     }
 
 
-def sonar(image: Image.Image, mode: str) -> dict:
-    return _sonar_result(depth_map(image, mode), mode)
+def sonar(image: Image.Image, mode: str, warning: str = "normal") -> dict:
+    return _sonar_result(depth_map(image, mode), warn_distance(mode, warning))
 
 
-def _sonar_result(depth: np.ndarray, mode: str) -> dict:
-    hit = find_obstacle(depth, mode)
+def _sonar_result(depth: np.ndarray, warn_m: float) -> dict:
+    hit = find_obstacle(depth, warn_m)
     if hit is None:
         return {"clear": True, "distance_m": None, "direction": None, "open": None}
     # Finer than half meters so the guide's thresholds change smoothly as you walk.
@@ -330,17 +338,28 @@ def _match_scores(crops: list[Image.Image], description: str) -> list[float]:
     return torch.sigmoid(logits).tolist()
 
 
-def _find_how_far(distance: float) -> str:
+def feet_words(meters: float) -> str:
+    """Whole feet up close, nearest 5 feet beyond 10, e.g. "7 feet", "15 feet"."""
+    feet = meters * FEET_PER_METER
+    feet = round(feet) if feet < 10 else 5 * round(feet / 5)
+    return f"{feet:g} {'foot' if feet == 1 else 'feet'}"
+
+
+def _find_how_far(distance: float, units: str = "meters") -> str:
     """Half meters up close, whole meters farther out, so the phrase set stays small."""
     if distance <= VERY_CLOSE_M:
         return "very close"
     if distance > FIND_MAX_SPOKEN_M:
-        return f"more than {FIND_MAX_SPOKEN_M} meters"
+        return f"more than {feet_words(FIND_MAX_SPOKEN_M)}" if units == "feet" else f"more than {FIND_MAX_SPOKEN_M} meters"
+    if units == "feet":
+        return f"about {feet_words(distance)}"
     meters = round(distance * 2) / 2 if distance < 3.25 else float(round(distance))
     return f"about {meters:g} {'meter' if meters == 1 else 'meters'}"
 
 
-def find_sentence(target: str, direction: str | None, distance: float | None, match: str | None = None) -> str:
+def find_sentence(
+    target: str, direction: str | None, distance: float | None, match: str | None = None, units: str = "meters"
+) -> str:
     """With a description, the sentence never repeats the user's words ("Found it", not "Red bench"),
     so every possible sentence can be on the /say allowlist and a cloned voice can't be made to say
     arbitrary text."""
@@ -348,24 +367,43 @@ def find_sentence(target: str, direction: str | None, distance: float | None, ma
         return "No match yet. Turn slowly." if match else f"No {target} yet. Turn slowly."
     where = {"left": "slightly left", "right": "slightly right"}.get(direction, "ahead")
     name = {"yes": "Found it", "possible": "Possible match"}.get(match or "", target.capitalize())
-    return f"{name}, {where}, {_find_how_far(distance)}."
+    return f"{name}, {where}, {_find_how_far(distance, units)}."
 
 
 def find_phrases() -> set[str]:
-    """Every sentence find() can return, for the /say allowlist."""
-    distances = [0.5, 1, 1.5, 2, 2.5, 3] + list(range(4, FIND_MAX_SPOKEN_M + 1)) + [FIND_MAX_SPOKEN_M + 1]
+    """Every sentence find() can return, for the /say allowlist. Distances are sampled every 5 cm,
+    so every rounding the sentence can produce, in meters or feet, is covered."""
+    distances = [round(0.5 + 0.05 * i, 2) for i in range(int((FIND_MAX_SPOKEN_M - 0.5) / 0.05) + 2)]
     phrases = {find_sentence("", None, None, "no")}
+    for units in UNITS:
+        for direction in ("left", "ahead", "right"):
+            for d in distances:
+                for target in FIND_TARGETS:
+                    phrases.add(find_sentence(target, direction, d, None, units))
+                for match in ("yes", "possible"):
+                    phrases.add(find_sentence("", direction, d, match, units))
     for target in FIND_TARGETS:
         phrases.add(find_sentence(target, None, None))
-        for direction in ("left", "ahead", "right"):
-            phrases |= {find_sentence(target, direction, d) for d in distances}
-    for match in ("yes", "possible"):
-        for direction in ("left", "ahead", "right"):
-            phrases |= {find_sentence("", direction, d, match) for d in distances}
     return phrases
 
 
-def find(image: Image.Image, mode: str, target: str, description: str | None = None) -> dict:
+# Automatic indoor/outdoor: SigLIP (already loaded for descriptions) compares the frame with these
+# two captions. Right on all 25 venue photos, with a wide margin (indoor -5.7 to -8.9, outdoor +2.3 to +6.6).
+SCENE_PROMPTS = ("a photo taken indoors", "a photo taken outdoors")
+
+
+def guess_scene(image: Image.Image) -> str:
+    processor, model = _match_model()
+    inputs = processor(text=list(SCENE_PROMPTS), images=[image], padding="max_length", return_tensors="pt").to(DEVICE)
+    with torch.inference_mode():
+        logits = model(**inputs).logits_per_image[0]
+    return "outdoor" if float(logits[1] - logits[0]) > 0 else "indoor"
+
+
+def find(
+    image: Image.Image, mode: str, target: str, description: str | None = None,
+    warning: str = "normal", units: str = "meters",
+) -> dict:
     """Where the target is (bearing and distance), plus the usual obstacle reading from the same depth map.
     With a description, the candidate that best matches it wins, and only if it matches well enough."""
     depth_job = _parallel.submit(depth_map, image, mode)
@@ -405,27 +443,30 @@ def find(image: Image.Image, mode: str, target: str, description: str | None = N
             box=[round(v, 3) for v in (x0, y0, x1 - x0, y1 - y0)],
         )
         result["_distance"] = distance
-    result["sentence"] = find_sentence(target, result["direction"], result.pop("_distance", None), result["match"])
-    result["obstacle"] = _sonar_result(depth, mode)
+    result["sentence"] = find_sentence(
+        target, result["direction"], result.pop("_distance", None), result["match"], units
+    )
+    result["obstacle"] = _sonar_result(depth, warn_distance(mode, warning))
     return result
 
 
 def to_sentence(
-    label: str | None, distance_m: float | None, direction: str | None, height: str | None, open_side: str | None = None
+    label: str | None, distance_m: float | None, direction: str | None, height: str | None,
+    open_side: str | None = None, units: str = "meters",
 ) -> str:
     if distance_m is None:
         return "Path clear"
     tail = f". More room on the {open_side}" if open_side else ""
     meters = round(distance_m * 2) / 2  # round to half meters
-    unit = "meter" if meters == 1 else "meters"
+    amount = feet_words(meters) if units == "feet" else f"{meters:g} {'meter' if meters == 1 else 'meters'}"
     # "1 meter ahead" reads as one phrase; "1 meter, slightly left" needs the pause.
     where = {"left": ", slightly left", "right": ", slightly right"}.get(direction or "", " ahead")
     if meters <= VERY_CLOSE_M:
         how_far = "very close"
     elif label:
-        how_far = f"about {meters:g} {unit}"
+        how_far = f"about {amount}"
     else:
-        how_far = f"{meters:g} {unit}"
+        how_far = amount
     if label:
         return f"{label.capitalize()}, {how_far}{where}{tail}"
     return f"Obstacle at {height} height, {how_far}{where}{tail}"

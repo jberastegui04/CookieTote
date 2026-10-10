@@ -30,13 +30,21 @@ def decode_image(data: bytes) -> Image.Image:
     return img
 
 
-async def read_image(image: UploadFile, mode: str) -> Image.Image:
-    if mode not in ("indoor", "outdoor"):
-        raise HTTPException(400, "mode must be indoor or outdoor")
+async def read_frame(image: UploadFile, mode: str, warning: str, units: str = "meters") -> tuple[Image.Image, str]:
+    """Checks the settings, decodes the photo, and resolves mode "auto" to the scene it shows."""
+    if mode not in ("indoor", "outdoor", "auto"):
+        raise HTTPException(400, "mode must be indoor, outdoor, or auto")
+    if warning not in pipeline.WARNING_SCALE:
+        raise HTTPException(400, f"warning must be one of: {', '.join(pipeline.WARNING_SCALE)}")
+    if units not in pipeline.UNITS:
+        raise HTTPException(400, f"units must be one of: {', '.join(pipeline.UNITS)}")
     try:
-        return await run_in_threadpool(decode_image, await image.read())
+        img = await run_in_threadpool(decode_image, await image.read())
     except UnidentifiedImageError:
         raise HTTPException(400, "image must be a photo")
+    if mode == "auto":
+        mode = await run_in_threadpool(pipeline.guess_scene, img)
+    return img, mode
 
 
 @app.get("/health")
@@ -46,10 +54,16 @@ def health():
 
 @app.post("/describe")
 async def describe(
-    image: UploadFile = File(...), mode: str = Form("indoor"), voice_id: str | None = Form(None)
+    image: UploadFile = File(...),
+    mode: str = Form("indoor"),
+    voice_id: str | None = Form(None),
+    warning: str = Form("normal"),
+    units: str = Form("meters"),
 ):
+    img, mode = await read_frame(image, mode, warning, units)
     # Models run in a worker thread so a sonar frame and a tap don't wait on each other.
-    result = await run_in_threadpool(pipeline.describe, await read_image(image, mode), mode)
+    result = await run_in_threadpool(pipeline.describe, img, mode, warning, units)
+    result["scene"] = mode
     # Null if ElevenLabs is unavailable, so the app speaks the sentence with expo-speech.
     result["audio_b64"] = await run_in_threadpool(voice.speak_b64, result["sentence"], voice_id)
     return result
@@ -64,6 +78,9 @@ def guide_phrases() -> set[str]:
         phrases.add(f"Something close {where}.")
         for m in range(1, 5):
             phrases.add(f"Something {where}, about {m} {'meter' if m == 1 else 'meters'}.")
+        # Feet versions for the Units setting: whole feet, as pipeline.feet_words says them.
+        for ft in range(1, 21):
+            phrases.add(f"Something {where}, about {ft} {'foot' if ft == 1 else 'feet'}.")
     return phrases
 
 
@@ -99,13 +116,18 @@ async def find(
     mode: str = Form("indoor"),
     target: str | None = Form(None),
     description: str | None = Form(None),
+    warning: str = Form("normal"),
+    units: str = Form("meters"),
 ):
     """target from the picker, and/or a description like "red bench" (which can name the target itself)."""
     description = (description or "").strip()[: pipeline.DESCRIPTION_MAX_CHARS] or None
     target = pipeline.target_from((target or "").strip().lower() or None, description)
     if target is None:
         raise HTTPException(400, f"name one of: {', '.join(pipeline.FIND_TARGETS)}")
-    return await run_in_threadpool(pipeline.find, await read_image(image, mode), mode, target, description)
+    img, mode = await read_frame(image, mode, warning, units)
+    result = await run_in_threadpool(pipeline.find, img, mode, target, description, warning, units)
+    result["scene"] = mode
+    return result
 
 
 # A spoken Find request is a few seconds. Both limits keep the public Space from being a free
@@ -177,8 +199,11 @@ async def voice_sample(voice_id: str):
 
 
 @app.post("/sonar")
-async def sonar(image: UploadFile = File(...), mode: str = Form("indoor")):
-    return await run_in_threadpool(pipeline.sonar, await read_image(image, mode), mode)
+async def sonar(image: UploadFile = File(...), mode: str = Form("indoor"), warning: str = Form("normal")):
+    img, mode = await read_frame(image, mode, warning)
+    result = await run_in_threadpool(pipeline.sonar, img, mode, warning)
+    result["scene"] = mode
+    return result
 
 
 if __name__ == "__main__":

@@ -43,7 +43,15 @@ design/             link to the Figma file and exported screens (Agustin)
 
 ## API
 
-Both endpoints take a POST with the photo as a form upload in a field called `image`, plus a `mode` field set to `indoor` or `outdoor` (defaults to `indoor`).
+`/describe`, `/sonar` and `/find` take a POST with the photo as a form upload in a field called `image`, plus these optional settings fields:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `mode` | `indoor` (default), `outdoor`, `auto` | `auto` guesses the scene from the photo (SigLIP; right on all 25 venue photos) and every response says which it used in `scene` |
+| `warning` | `close`, `normal` (default), `early` | the "Warn me" setting: warning distance indoors 1.5 / 2 / 3 m, outdoors 3 / 4 / 6 m |
+| `units` | `meters` (default), `feet` | spoken sentences only (`/describe`, `/find`); `distance_m` is always meters |
+
+Every response also includes `scene` (`indoor` or `outdoor`), the mode actually used.
 
 ### POST /describe
 

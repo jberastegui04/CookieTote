@@ -15,7 +15,7 @@ Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and l
 - `design/` (Agustin): Figma link and exported screens.
 
 ## API contract (keep app, backend, and README in sync; do not change field names)
-Both endpoints: POST multipart with `image` (photo) and `mode` ("indoor" | "outdoor", defaults to indoor).
+`/describe`, `/sonar`, `/find`: POST multipart with `image` (photo), plus optional `mode` ("indoor" | "outdoor" | "auto", default indoor; auto guesses the scene), `warning` ("close" | "normal" | "early", scales the 2 m / 4 m warning distance by 0.75 / 1 / 1.5), and `units` ("meters" | "feet", spoken sentences only; `distance_m` stays meters). Every response includes `scene` ("indoor" | "outdoor"), the mode actually used. Feet guide phrases ("Something ahead, about 6 feet.") are on the /say allowlist.
 
 `POST /describe` returns `clear` (boolean), `sentence` (string), `label` (string | null), `distance_m` (number rounded to 0.5 | null), `direction` ("left" | "ahead" | "right" | null), `height` ("foot" | "waist" | "head" | null), `box` ([x, y, width, height], each 0 to 1 of the image | null), `audio_b64` (base64 ElevenLabs WAV | null; when null the app uses expo-speech). `main.py` adds `audio_b64`; the pipeline returns the rest.
 
