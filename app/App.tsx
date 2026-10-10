@@ -116,8 +116,8 @@ export default function App() {
         style={StyleSheet.absoluteFill}
         onPress={scan}
         accessibilityRole="button"
-        accessibilityLabel="Scan what's ahead"
-        accessibilityHint="Takes a photo and announces the closest obstacle"
+        accessibilityLabel="Describe what's ahead"
+        accessibilityHint="Double tap to scan"
       />
 
       <View style={styles.topBar} pointerEvents="box-none">
