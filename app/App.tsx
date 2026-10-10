@@ -122,6 +122,10 @@ const CAMERA_HALF_FOV_DEG = 26;
 const YAW_SIGN = 1;
 // Out-of-view misses in a row before a remembered heading is dropped (the target may have been a false hit).
 const FIND_MISS_LIMIT = 3;
+// After this many answers in a row with nothing found, Find sends sharper frames, so small or
+// far-off things (a bottle across the room) have a chance. Costs some upload time per frame.
+const FIND_BLANKS_FOR_SHARP = 2;
+const FIND_SHARP_WIDTH_PX = 1024;
 const clockPhrase = (target: string, offsetDeg: number) => {
   const hour = ((Math.round(offsetDeg / 30) + 12) % 12) || 12;
   return `${capitalize(target)} at ${hour} o'clock.`;
@@ -256,6 +260,7 @@ export default function App() {
   const [headingNow, setHeadingNow] = useState<number | null>(null); // same, as state, so the screen follows the turn
   const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
   const findMisses = useRef(0);
+  const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
   // The guide voice: one phrase at a time, files cached per voice, and the phone's voice as fallback.
@@ -711,6 +716,7 @@ export default function App() {
     quietUntil.current = Date.now() + 1800;
     targetHeadingRef.current = null;
     findMisses.current = 0;
+    findBlanks.current = 0;
     startHeading();
     frameLoop(
       () => findOnRef.current,
@@ -954,14 +960,20 @@ export default function App() {
 
   function applyFind(data: FindResult, headingAtCapture: number | null) {
     const target = findTargetRef.current ?? data.target;
-    // An obstacle right in front wins over the target.
+    findBlanks.current = data.found ? 0 : findBlanks.current + 1;
+    if (data.found && data.bearing_deg !== null && headingAtCapture !== null) {
+      // Remember which way the phone pointed, even if an obstacle takes the sentence below.
+      targetHeadingRef.current = wrapDeg(headingAtCapture + data.bearing_deg);
+    }
+    // An obstacle in the way wins over the target: "Stop" interrupts, "close" just takes the next
+    // turn to speak, so you can step around it and let the clock point you back.
     const o = data.obstacle;
     const danger = !o.clear && o.distance_m !== null ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null) : null;
-    if (danger?.stop) {
+    if (danger && (danger.stop || danger.key.startsWith('close'))) {
       setFindInfo(data);
       interruptForStop(danger);
       situation.current = danger;
-      buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      if (danger.stop) buzz(Haptics.ImpactFeedbackStyle.Heavy);
       return;
     }
     if (data.found && data.bearing_deg !== null) {
@@ -1061,7 +1073,8 @@ export default function App() {
             skipProcessing: GUIDE_SKIP_PROCESSING,
           });
           if (!photo) throw new Error('No photo');
-          uri = await shrink(photo.uri, SONAR_WIDTH_PX);
+          const sharp = findOnRef.current && findBlanks.current >= FIND_BLANKS_FOR_SHARP;
+          uri = await shrink(photo.uri, sharp ? FIND_SHARP_WIDTH_PX : SONAR_WIDTH_PX);
         } catch (e) {
           console.warn(e);
           fail();
