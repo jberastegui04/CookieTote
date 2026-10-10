@@ -67,7 +67,9 @@ def guide_phrases() -> set[str]:
 
 # The Space is public, so /say only speaks guide and find phrases: otherwise anyone with the link
 # could make a cloned trusted voice say anything, and spend the ElevenLabs credits doing it.
-GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases()
+# Find mode's arrival line, one per target. Mirrors arrivalPhrase() in app/App.tsx.
+ARRIVAL_PHRASES = {f"You're there. The {t} is right in front of you. Reach forward." for t in pipeline.FIND_TARGETS}
+GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES
 
 
 @app.get("/say")

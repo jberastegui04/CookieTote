@@ -109,6 +109,9 @@ const OPEN_STREAK = 2;
 const FIND_REMIND_MS = 3000;
 const FIND_AHEAD_DEG = 8;
 const FIND_NEAR_DEG = 16;
+// Centered and this close: you've arrived. Find stops and says to reach forward.
+const ARRIVE_DISTANCE_M = 0.7;
+const arrivalPhrase = (target: string) => `You're there. The ${target} is right in front of you. Reach forward.`;
 
 type Situation = { key: string; text: string; stop: boolean };
 const OPEN: Situation = { key: 'open', text: 'Path looks open.', stop: false };
@@ -223,8 +226,10 @@ export default function App() {
   const [findTarget, setFindTarget] = useState<string | null>(null);
   const [showTargets, setShowTargets] = useState(false);
   const [findInfo, setFindInfo] = useState<FindResult | null>(null);
+  const [arrived, setArrived] = useState<string | null>(null); // target just reached, until the next action
   const findOnRef = useRef(false);
   const findTargetRef = useRef<string | null>(null);
+  const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
   // The guide voice: one phrase at a time, files cached per voice, and the phone's voice as fallback.
   const speechBusy = useRef(false);
   const speakingStop = useRef(false);
@@ -647,6 +652,7 @@ export default function App() {
   function toggleGuide() {
     const on = !guideOnRef.current;
     if (on && findOnRef.current) stopFind(false);
+    setArrived(null);
     guideOnRef.current = on;
     setGuideOn(on);
     situation.current = null;
@@ -672,6 +678,7 @@ export default function App() {
     setFindTarget(target);
     findOnRef.current = true;
     setFindOn(true);
+    setArrived(null);
     situation.current = null;
     setFindInfo(null);
     buzz(Haptics.ImpactFeedbackStyle.Light);
@@ -679,7 +686,17 @@ export default function App() {
     quietUntil.current = Date.now() + 1800;
     frameLoop(() => findOnRef.current, '/find', () => ({ target }), applyFind);
     voiceLoop();
-    fetchPhrase(`No ${target} yet. Turn slowly.`);
+    fetchPhrase(`No ${target} yet. Turn slowly.`).then(() => fetchPhrase(arrivalPhrase(target)));
+  }
+
+  // Centered and within reach: stop, ding, buzz, and say so.
+  async function arrive(target: string) {
+    stopFind(false);
+    setArrived(target);
+    notify(Haptics.NotificationFeedbackType.Success);
+    arriveSound.seekTo(0).then(() => arriveSound.play()).catch(() => {});
+    await sleep(450);
+    await speakPhrase(arrivalPhrase(target), true);
   }
 
   function stopFind(announce = true) {
@@ -801,6 +818,10 @@ export default function App() {
       interruptForStop(danger);
       situation.current = danger;
       buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      return;
+    }
+    if (data.found && data.centered && data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M) {
+      arrive(findTargetRef.current ?? data.target);
       return;
     }
     situation.current = { key: data.sentence, text: data.sentence, stop: false };
@@ -926,6 +947,7 @@ export default function App() {
     if (status === 'capturing' || status === 'thinking') return;
     try {
       setStatus('capturing');
+      setArrived(null);
       quietUntil.current = Date.now() + 8000;
       sayStatus(SCANNING);
       await buzz(Haptics.ImpactFeedbackStyle.Light);
@@ -986,7 +1008,9 @@ export default function App() {
         ? `${distance.toFixed(1)} m`
         : findOn
           ? capitalize(findTarget ?? 'Find')
-          : guideOn || (resultVisible && result?.clear)
+          : arrived
+            ? "You're there"
+            : guideOn || (resultVisible && result?.clear)
             ? 'Path clear'
             : 'Ready';
   const detail = busy
@@ -999,7 +1023,9 @@ export default function App() {
             .join(' · ')
         : findOn
           ? findInfo?.sentence ?? 'Turn slowly'
-          : guideOn
+          : arrived
+            ? `Reach forward for the ${arrived}`
+            : guideOn
             ? guideText || 'The voice tells you what changes'
             : resultVisible && result?.clear
             ? 'Nothing in your path'
