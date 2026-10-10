@@ -10,7 +10,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Guide mode.** A toggle you leave on while walking. The app checks depth about once a second and a voice of your choosing (including a cloned trusted voice) tells you what changed, in short general phrases: "Something ahead, about 2 meters", "Something close on your left", "Stop. Something right in front of you. More room on the right", "Path looks open". It speaks only when the situation changes, with a reminder every few seconds while something is there, and never talks over itself. One buzz on "stop". No beeps. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
-**Find mode.** Tap Find, pick an object (chair, table, person, and a few more), and the voice tells you where it is as you turn: "Chair, slightly right, about 3 meters." Haptics pulse harder as you face it, with a double pulse when it's straight ahead. An obstacle right in front still says "Stop" over everything.
+**Find mode.** Tap Find, pick an object (chair, table, person, and a few more), and the voice tells you where it is as you turn: "Chair, slightly right, about 3 meters." Once it has seen the object, the app remembers which way the phone was pointing (gyro), so when you turn away it says "Chair at 2 o'clock" and keeps pulsing toward it several times a second, stronger and faster as you face it, with a double pulse when you're lined up. Within reach, it dings and says "You're there. Reach forward." An obstacle right in front still says "Stop" over everything.
 
 **Indoor and outdoor setting.** Applies to both modes. Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors).
 

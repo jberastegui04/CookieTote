@@ -69,7 +69,9 @@ def guide_phrases() -> set[str]:
 # could make a cloned trusted voice say anything, and spend the ElevenLabs credits doing it.
 # Find mode's arrival line, one per target. Mirrors arrivalPhrase() in app/App.tsx.
 ARRIVAL_PHRASES = {f"You're there. The {t} is right in front of you. Reach forward." for t in pipeline.FIND_TARGETS}
-GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES
+# Clock directions from the remembered heading. Mirrors clockPhrase() in app/App.tsx.
+CLOCK_PHRASES = {f"{t.capitalize()} at {h} o'clock." for t in pipeline.FIND_TARGETS for h in range(1, 13)}
+GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES
 
 
 @app.get("/say")

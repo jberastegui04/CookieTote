@@ -20,6 +20,7 @@ import {
 import { File, Paths } from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as Haptics from 'expo-haptics';
+import { DeviceMotion } from 'expo-sensors';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Settings from './Settings';
@@ -109,6 +110,20 @@ const OPEN_STREAK = 2;
 const FIND_REMIND_MS = 3000;
 const FIND_AHEAD_DEG = 8;
 const FIND_NEAR_DEG = 16;
+// Remembered heading. The camera sees about 52 degrees, so once the target has been seen the app
+// notes which way the phone was pointing (gyro) and keeps guiding by that when it's out of view:
+// "Chair at 2 o'clock", and pulses several times a second from the gyro, not from the frames.
+const CAMERA_HALF_FOV_DEG = 26;
+// The gyro's yaw grows counterclockwise; heading here grows clockwise (like a compass). If turning
+// right makes the clock position drift the wrong way on a real phone, flip this to -1.
+const YAW_SIGN = 1;
+// Out-of-view misses in a row before a remembered heading is dropped (the target may have been a false hit).
+const FIND_MISS_LIMIT = 3;
+const clockPhrase = (target: string, offsetDeg: number) => {
+  const hour = ((Math.round(offsetDeg / 30) + 12) % 12) || 12;
+  return `${capitalize(target)} at ${hour} o'clock.`;
+};
+const wrapDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-180, 180]
 // Centered and this close: you've arrived. Find stops and says to reach forward.
 const ARRIVE_DISTANCE_M = 0.7;
 const arrivalPhrase = (target: string) => `You're there. The ${target} is right in front of you. Reach forward.`;
@@ -229,6 +244,10 @@ export default function App() {
   const [arrived, setArrived] = useState<string | null>(null); // target just reached, until the next action
   const findOnRef = useRef(false);
   const findTargetRef = useRef<string | null>(null);
+  const headingRef = useRef<number | null>(null); // phone heading in degrees, clockwise, from the gyro
+  const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
+  const findMisses = useRef(0);
+  const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
   // The guide voice: one phrase at a time, files cached per voice, and the phone's voice as fallback.
   const speechBusy = useRef(false);
@@ -684,9 +703,66 @@ export default function App() {
     buzz(Haptics.ImpactFeedbackStyle.Light);
     tell(`Finding ${target}. Turn slowly.`);
     quietUntil.current = Date.now() + 1800;
+    targetHeadingRef.current = null;
+    findMisses.current = 0;
+    startHeading();
     frameLoop(() => findOnRef.current, '/find', () => ({ target }), applyFind);
     voiceLoop();
+    pulseLoop();
     fetchPhrase(`No ${target} yet. Turn slowly.`).then(() => fetchPhrase(arrivalPhrase(target)));
+  }
+
+  // Gyro heading while Find is on. Degrees, clockwise, relative (no compass needed).
+  async function startHeading() {
+    headingRef.current = null;
+    try {
+      if (!(await DeviceMotion.isAvailableAsync())) return;
+      DeviceMotion.setUpdateInterval(100);
+      motionSub.current = DeviceMotion.addListener((m) => {
+        if (m.rotation) headingRef.current = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+
+  function stopHeading() {
+    motionSub.current?.remove();
+    motionSub.current = null;
+    headingRef.current = null;
+    targetHeadingRef.current = null;
+  }
+
+  // How far to turn to face the remembered target, in degrees (right is positive), or null.
+  function targetOffset(): number | null {
+    if (headingRef.current === null || targetHeadingRef.current === null) return null;
+    return wrapDeg(targetHeadingRef.current - headingRef.current);
+  }
+
+  // Haptics from the gyro, several times a second: stronger and faster as you turn toward the
+  // target, a double pulse when you're facing it. Runs until Find stops.
+  async function pulseLoop() {
+    while (findOnRef.current) {
+      const off = targetOffset();
+      if (off === null) {
+        await sleep(200);
+        continue;
+      }
+      const a = Math.abs(off);
+      if (a <= FIND_AHEAD_DEG) {
+        buzz(Haptics.ImpactFeedbackStyle.Heavy);
+        if (a <= 5) setTimeout(() => buzz(Haptics.ImpactFeedbackStyle.Heavy), 140);
+        await sleep(350);
+      } else if (a <= CAMERA_HALF_FOV_DEG) {
+        buzz(Haptics.ImpactFeedbackStyle.Medium);
+        await sleep(500);
+      } else if (a <= 90) {
+        buzz(Haptics.ImpactFeedbackStyle.Light);
+        await sleep(800);
+      } else {
+        await sleep(300);
+      }
+    }
   }
 
   // Centered and within reach: stop, ding, buzz, and say so.
@@ -702,6 +778,7 @@ export default function App() {
   function stopFind(announce = true) {
     findOnRef.current = false;
     setFindOn(false);
+    stopHeading();
     situation.current = null;
     setFindInfo(null);
     if (announce) {
@@ -781,7 +858,7 @@ export default function App() {
     }
   }
 
-  function applyGuide(data: SonarResult) {
+  function applyGuide(data: SonarResult, _heading: number | null) {
     if (data.clear || data.distance_m === null) {
       recentDirections.current = [];
       clearStreak.current += 1;
@@ -809,33 +886,73 @@ export default function App() {
     setGuideSide(side);
   }
 
-  function applyFind(data: FindResult) {
-    setFindInfo(data);
+  function applyFind(data: FindResult, headingAtCapture: number | null) {
+    const target = findTargetRef.current ?? data.target;
     // An obstacle right in front wins over the target.
     const o = data.obstacle;
     const danger = !o.clear && o.distance_m !== null ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null) : null;
     if (danger?.stop) {
+      setFindInfo(data);
       interruptForStop(danger);
       situation.current = danger;
       buzz(Haptics.ImpactFeedbackStyle.Heavy);
       return;
     }
-    if (data.found && data.centered && data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M) {
-      arrive(findTargetRef.current ?? data.target);
+    if (data.found && data.bearing_deg !== null) {
+      // Seen: remember which way the phone pointed, plus where in the frame it was.
+      findMisses.current = 0;
+      if (headingAtCapture !== null) targetHeadingRef.current = wrapDeg(headingAtCapture + data.bearing_deg);
+      setFindInfo(data);
+      if (data.centered && data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M) {
+        arrive(target);
+        return;
+      }
+      situation.current = { key: data.sentence, text: data.sentence, stop: false };
+      // No gyro: pulse from the frame instead.
+      if (headingRef.current === null) {
+        const off = Math.abs(data.bearing_deg);
+        buzz(
+          off <= FIND_AHEAD_DEG
+            ? Haptics.ImpactFeedbackStyle.Heavy
+            : off <= FIND_NEAR_DEG
+              ? Haptics.ImpactFeedbackStyle.Medium
+              : Haptics.ImpactFeedbackStyle.Light,
+        );
+        if (data.centered) setTimeout(() => buzz(Haptics.ImpactFeedbackStyle.Heavy), 140);
+      }
       return;
     }
+    // Not in this frame. If we know where it was, guide by the gyro: clock position, and the
+    // screen's arrow and meter follow the remembered direction.
+    const off = targetOffset();
+    if (off !== null) {
+      if (Math.abs(off) <= CAMERA_HALF_FOV_DEG) {
+        // It should be in view and isn't: a few misses in a row and we stop trusting the memory.
+        findMisses.current += 1;
+        if (findMisses.current >= FIND_MISS_LIMIT) {
+          targetHeadingRef.current = null;
+          setFindInfo(data);
+          situation.current = { key: data.sentence, text: data.sentence, stop: false };
+          return;
+        }
+      } else {
+        findMisses.current = 0;
+      }
+      const text = clockPhrase(target, off);
+      const clamped = Math.max(-CAMERA_HALF_FOV_DEG, Math.min(CAMERA_HALF_FOV_DEG, off));
+      setFindInfo({
+        ...data,
+        found: true,
+        direction: Math.abs(off) <= FIND_AHEAD_DEG ? 'ahead' : off > 0 ? 'right' : 'left',
+        bearing_deg: clamped,
+        centered: Math.abs(off) <= 5,
+        sentence: text,
+      });
+      situation.current = { key: text, text, stop: false };
+      return;
+    }
+    setFindInfo(data);
     situation.current = { key: data.sentence, text: data.sentence, stop: false };
-    if (!data.found || data.bearing_deg === null) return;
-    // Stronger as the target nears the center; a double pulse when you're facing it.
-    const off = Math.abs(data.bearing_deg);
-    const style =
-      off <= FIND_AHEAD_DEG
-        ? Haptics.ImpactFeedbackStyle.Heavy
-        : off <= FIND_NEAR_DEG
-          ? Haptics.ImpactFeedbackStyle.Medium
-          : Haptics.ImpactFeedbackStyle.Light;
-    buzz(style);
-    if (data.centered) setTimeout(() => buzz(Haptics.ImpactFeedbackStyle.Heavy), 140);
   }
 
   // Frames for the guide and for find: capture, shrink, send. Up to two frames wait on the server
@@ -844,7 +961,7 @@ export default function App() {
     isOn: () => boolean,
     endpoint: string,
     fields: () => Record<string, string>,
-    apply: (data: T) => void,
+    apply: (data: T, headingAtCapture: number | null) => void,
   ) {
     let seq = 0;
     let applied = 0;
@@ -869,6 +986,7 @@ export default function App() {
       // than GUIDE_IN_FLIGHT frames waiting on the server.
       if (!cameraBusy.current && !describePlaying() && inFlight < GUIDE_IN_FLIGHT) {
         cameraBusy.current = true;
+        const headingAtCapture = headingRef.current;
         let uri: string | null = null;
         try {
           const photo = await cameraRef.current?.takePictureAsync({
@@ -899,7 +1017,7 @@ export default function App() {
               if (n <= applied || !isOn()) return;
               applied = n;
               failures = 0;
-              apply(data);
+              apply(data, headingAtCapture);
             })
             .catch((e) => {
               console.warn(e);
