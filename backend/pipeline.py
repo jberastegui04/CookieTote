@@ -4,6 +4,7 @@ Both functions take a PIL image and a mode ("indoor" or "outdoor") and return a 
 main.py adds audio_b64 to the describe() result, so don't add it here.
 """
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
@@ -62,15 +63,22 @@ DETECT_MIN_OVERLAP = 0.3
 # ...and be about as far away as the obstacle, so a table across the room can't name a pillar.
 DETECT_DEPTH_MARGIN_M = 0.5
 
+# GPU when the Space has one (all three models together drop from about 1.1 s to about 0.1 s a frame),
+# CPU otherwise, so laptops and the CPU Space keep working unchanged.
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 # Load once at import so each request doesn't reload the model. Outdoor loads on first use.
-_depth_pipes = {"indoor": hf_pipeline("depth-estimation", model=DEPTH_MODELS["indoor"])}
-_detector = hf_pipeline("object-detection", model=DETECT_MODEL)
+_depth_pipes = {"indoor": hf_pipeline("depth-estimation", model=DEPTH_MODELS["indoor"], device=DEVICE)}
+_detector = hf_pipeline("object-detection", model=DETECT_MODEL, device=DEVICE)
+# find() runs depth and detection side by side instead of one after the other. On a GPU that
+# overlaps them; on CPU it's about even, since each model already uses every core.
+_parallel = ThreadPoolExecutor(max_workers=4)
 
 
 def depth_map(image: Image.Image, mode: str) -> np.ndarray:
     """Depth in meters as a 2D array. Uses predicted_depth (meters), not depth (a picture for viewing)."""
     if mode not in _depth_pipes:
-        _depth_pipes[mode] = hf_pipeline("depth-estimation", model=DEPTH_MODELS[mode])
+        _depth_pipes[mode] = hf_pipeline("depth-estimation", model=DEPTH_MODELS[mode], device=DEVICE)
     out = _depth_pipes[mode](image)
     return out["predicted_depth"].squeeze().cpu().numpy() * DEPTH_SCALE[mode]
 
@@ -265,7 +273,7 @@ def _match_model():
     with _match_lock:
         if not _match:
             _match["processor"] = AutoProcessor.from_pretrained(MATCH_MODEL)
-            _match["model"] = AutoModel.from_pretrained(MATCH_MODEL).eval()
+            _match["model"] = AutoModel.from_pretrained(MATCH_MODEL).eval().to(DEVICE)
     return _match["processor"], _match["model"]
 
 
@@ -315,7 +323,7 @@ def parse_request(text: str) -> tuple[str | None, str | None]:
 
 def _match_scores(crops: list[Image.Image], description: str) -> list[float]:
     processor, model = _match_model()
-    inputs = processor(text=[f"a photo of a {description}"], images=crops, padding="max_length", return_tensors="pt")
+    inputs = processor(text=[f"a photo of a {description}"], images=crops, padding="max_length", return_tensors="pt").to(DEVICE)
     with torch.inference_mode():
         logits = model(**inputs).logits_per_image[:, 0]
     return torch.sigmoid(logits).tolist()
@@ -359,10 +367,12 @@ def find_phrases() -> set[str]:
 def find(image: Image.Image, mode: str, target: str, description: str | None = None) -> dict:
     """Where the target is (bearing and distance), plus the usual obstacle reading from the same depth map.
     With a description, the candidate that best matches it wins, and only if it matches well enough."""
-    depth = depth_map(image, mode)
+    depth_job = _parallel.submit(depth_map, image, mode)
+    detections = _detector(image, threshold=DETECT_THRESHOLD)
+    depth = depth_job.result()
     w, h = image.size
     wanted = FIND_TARGETS[target]
-    hits = [d for d in _detector(image, threshold=DETECT_THRESHOLD) if d["label"] == wanted]
+    hits = [d for d in detections if d["label"] == wanted]
     # The biggest one is usually the nearest.
     hits.sort(key=lambda d: -(d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))
     result = {"found": False, "target": target, "description": description, "match": None, "match_score": None,

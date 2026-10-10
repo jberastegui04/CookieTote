@@ -7,10 +7,11 @@ USER user
 ENV HOME=/home/user PATH=/home/user/.local/bin:$PATH HF_HOME=/home/user/.cache/huggingface
 WORKDIR /home/user/app
 
-# CPU-only torch is a fraction of the size of the default CUDA build. torchvision (pulled in by timm)
-# must come from the same index, or it won't match torch and transformers fails to import.
+# GPU torch for the T4 Space (CUDA 12.6 runs on the drivers Hugging Face ships; the CUDA 13 build may
+# not). It still runs on CPU hardware, just bigger. torchvision (pulled in by timm) must come from the
+# same index, or it won't match torch and transformers fails to import.
 COPY --chown=user requirements.txt .
-RUN pip install --no-cache-dir --user torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --no-cache-dir --user torch torchvision --index-url https://download.pytorch.org/whl/cu126 \
     && pip install --no-cache-dir --user -r requirements.txt
 
 # Download the models during the build so the first request isn't slow.

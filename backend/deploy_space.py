@@ -12,16 +12,22 @@ from huggingface_hub import HfApi
 
 SPACE_ID = "michaelmccamy/obstacle-alert-api"
 SPACE_URL = "https://michaelmccamy-obstacle-alert-api.hf.space"
+# Paid hardware billed to Michael's account credits (free cpu-basic Docker Spaces need PRO).
+# t4-small cuts a frame from about 1.1 s to about 0.1 s of model time; "cpu-upgrade" is the cheap fallback.
+SPACE_HARDWARE = "t4-small"
+# Sleeps after an hour with no requests, so it doesn't bill overnight. The first request after
+# sleeping takes about a minute.
+SLEEP_S = 3600
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 load_dotenv(os.path.join(HERE, ".env"))
 api = HfApi()
 # Public, so the app can reach it without a token. Keys live in Space secrets, not the code.
-# Free cpu-basic needs PRO, so this runs on paid cpu-upgrade (billed to account credits) and
-# sleeps after an hour with no requests. The first request after sleeping takes about a minute.
 api.create_repo(
-    SPACE_ID, repo_type="space", space_sdk="docker", space_hardware="cpu-upgrade", space_sleep_time=3600, exist_ok=True
+    SPACE_ID, repo_type="space", space_sdk="docker", space_hardware=SPACE_HARDWARE, space_sleep_time=SLEEP_S, exist_ok=True
 )
+if api.get_space_runtime(SPACE_ID).requested_hardware != SPACE_HARDWARE:
+    api.request_space_hardware(SPACE_ID, SPACE_HARDWARE, sleep_time=SLEEP_S)
 
 for name in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
     if os.getenv(name):

@@ -165,7 +165,7 @@ To reach the backend from a phone, run `ngrok http 8000` and share the link.
 
 ### Deployed backend
 
-The backend runs on a Hugging Face Space at `https://michaelmccamy-obstacle-alert-api.hf.space` (paid CPU upgrade on Michael's account credits, sleeps after an hour idle, so the first request after that takes about a minute). To redeploy after changing the backend, log in with a write token (`hf auth login`), then from `backend/` run `python deploy_space.py`. It uploads the code (never `.env`), copies the ElevenLabs key into the Space's secrets, and rebuilds in a few minutes.
+The backend runs on a Hugging Face Space at `https://michaelmccamy-obstacle-alert-api.hf.space` (T4 GPU, about $0.40 an hour on Michael's account credits; `SPACE_HARDWARE` in `deploy_space.py` switches back to the CPU upgrade. Sleeps after an hour idle, so the first request after that takes about a minute). To redeploy after changing the backend, log in with a write token (`hf auth login`), then from `backend/` run `python deploy_space.py`. It uploads the code (never `.env`), copies the ElevenLabs key into the Space's secrets, and rebuilds in a few minutes.
 
 ### App
 
