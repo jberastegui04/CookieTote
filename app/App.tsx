@@ -87,7 +87,9 @@ function classify(distance: number, direction: Side, open: 'left' | 'right' | nu
     return { key: `close:${direction}`, text: `Something close ${where}.`, stop: false };
   }
   const meters = Math.max(1, Math.min(4, Math.round(distance)));
-  return { key: `far:${direction}:${meters}`, text: `Something ${where}, about ${meters} meters.`, stop: false };
+  const unit = meters === 1 ? 'meter' : 'meters';
+  // backend/main.py only speaks these exact phrases (GUIDE_PHRASES); change both together.
+  return { key: `far:${direction}:${meters}`, text: `Something ${where}, about ${meters} ${unit}.`, stop: false };
 }
 
 // Phrases worth fetching as soon as guide mode turns on, so the first warning isn't late.

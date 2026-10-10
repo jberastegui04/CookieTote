@@ -53,12 +53,28 @@ async def describe(
     return result
 
 
+def guide_phrases() -> set[str]:
+    """Every sentence guide mode can say. Mirrors classify() and OPEN in app/App.tsx."""
+    phrases = {"Path looks open.", "Stop. Something right in front of you."}
+    phrases |= {f"Stop. Something right in front of you. More room on the {s}." for s in ("left", "right")}
+    for where in ("ahead", "on your left", "on your right"):
+        phrases.add(f"Something close {where}.")
+        for m in range(1, 5):
+            phrases.add(f"Something {where}, about {m} {'meter' if m == 1 else 'meters'}.")
+    return phrases
+
+
+# The Space is public, so /say only speaks guide phrases: otherwise anyone with the link could
+# make a cloned trusted voice say anything, and spend the ElevenLabs credits doing it.
+GUIDE_PHRASES = guide_phrases()
+
+
 @app.get("/say")
 async def say(text: str, voice_id: str | None = None):
-    """WAV of a short phrase in the chosen voice, for guide mode. Cached by (voice, text)."""
+    """WAV of a guide-mode phrase in the chosen voice. Cached by (voice, text)."""
     text = text.strip()
-    if not text or len(text) > 120:
-        raise HTTPException(400, "text must be 1 to 120 characters")
+    if text not in GUIDE_PHRASES:
+        raise HTTPException(400, "not a guide phrase")
     wav = await run_in_threadpool(voice.speak_wav, text, voice_id)
     if wav is None:
         raise HTTPException(503, "voice unavailable")
