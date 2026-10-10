@@ -124,6 +124,11 @@ const FEET_PER_METER = 3.281;
 type GuideSettings = { units?: Units; warning?: Warning };
 // "Path looks open" needs this many clear readings in a row, so one noisy frame can't say it.
 const OPEN_STREAK = 2;
+// The nearest obstacle keeps the microphone. A more urgent reading (far -> close -> stop)
+// replaces the current warning at once; a less urgent one, or the same urgency on the other
+// side, only after this many frames in a row agree (about one frame a second). Otherwise one
+// noisy frame makes the voice jump to the next thing before the user has dealt with this one.
+const DOWNGRADE_STREAK = 2;
 // Find mode: repeat the sentence this often while it hasn't changed, and pulse harder as the
 // target nears the center of the frame (bearing 0).
 const FIND_REMIND_MS = 3000;
@@ -203,6 +208,16 @@ function classify(
   const meters = Math.max(1, Math.min(4, Math.round(distance)));
   const unit = meters === 1 ? 'meter' : 'meters';
   return { key: `far:${direction}:${meters}`, text: `Something ${where}, about ${meters} ${unit}.`, stop: false };
+}
+
+// How urgent a guide situation is: stop > close > far > open. Used to decide whether a new
+// reading may replace the current warning right away (see DOWNGRADE_STREAK).
+function urgency(s: Situation | null): number {
+  if (!s) return 0;
+  if (s.stop) return 3;
+  if (s.key.startsWith('close')) return 2;
+  if (s.key.startsWith('far')) return 1;
+  return 0;
 }
 
 // Said at the start of every scan, in the chosen voice. The backend's /say allows it (main.py).
@@ -297,6 +312,7 @@ export default function App() {
   const situation = useRef<Situation | null>(null); // newest reading, sorted; null until the first one
   const recentDirections = useRef<Side[]>([]); // last few readings, so one noisy frame can't flip the side
   const clearStreak = useRef(0);
+  const downgradeStreak = useRef(0); // frames in a row saying something less urgent than the current warning
   // Find mode: where a chosen object is. Shares the frame loop and the voice with the guide.
   const [findOn, setFindOn] = useState(false);
   const [findTarget, setFindTarget] = useState<string | null>(null);
@@ -860,6 +876,7 @@ export default function App() {
     situation.current = null;
     recentDirections.current = [];
     clearStreak.current = 0;
+    downgradeStreak.current = 0;
     setGuideDistance(null);
     setGuideSide(null);
     setGuideText('');
@@ -1189,6 +1206,7 @@ export default function App() {
   function applyGuide(data: SonarResult, _heading: number | null) {
     if (data.clear || data.distance_m === null) {
       recentDirections.current = [];
+      downgradeStreak.current = 0;
       clearStreak.current += 1;
       if (clearStreak.current >= OPEN_STREAK) situation.current = OPEN;
       setGuideDistance(null);
@@ -1200,6 +1218,23 @@ export default function App() {
     recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
     const side = majority(recentDirections.current);
     const next = classify(data.distance_m, side, data.open ?? null, guideSettings());
+    // The current warning holds until the user has dealt with it. Anything as urgent or more
+    // (and the same phrase, so distance updates keep flowing) replaces it at once; anything
+    // less urgent, or the same urgency on another side, needs DOWNGRADE_STREAK frames.
+    const held = situation.current;
+    const heldRank = held && held.key !== OPEN.key ? urgency(held) : 0;
+    const nextRank = urgency(next);
+    const sameThing = !held || held.key === next.key || held.key === OPEN.key;
+    const bump = nextRank > heldRank || (nextRank === heldRank && next.key.startsWith('far'));
+    if (!sameThing && !bump) {
+      downgradeStreak.current += 1;
+      if (downgradeStreak.current < DOWNGRADE_STREAK) {
+        setGuideDistance(data.distance_m);
+        setGuideSide(side);
+        return;
+      }
+    }
+    downgradeStreak.current = 0;
     interruptForStop(next);
     situation.current = next;
     // A pulse on every reading, stronger when closer. Never waits on speech.
