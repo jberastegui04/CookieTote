@@ -2,21 +2,25 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
+import { setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
+import * as Speech from 'expo-speech';
 
 // Your laptop's address on the same Wi-Fi, set in app/.env (see README).
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 type Mode = 'indoor' | 'outdoor';
 
-type AnalyzeResult = {
+// Matches POST /describe in the README. Keep in sync with backend/main.py.
+type DescribeResult = {
+  clear: boolean;
   sentence: string;
-  distance_m: number | null;
-  direction: 'left' | 'center' | 'right' | null;
-  height_band: 'foot' | 'waist' | 'head' | null;
   label: string | null;
-  audio_url: string | null;
+  distance_m: number | null;
+  direction: 'left' | 'ahead' | 'right' | null;
+  height: 'foot' | 'waist' | 'head' | null;
+  box: [number, number, number, number] | null;
+  audio_b64: string | null;
 };
 
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
@@ -24,10 +28,9 @@ type Status = 'idle' | 'capturing' | 'thinking' | 'error';
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
-  const player = useAudioPlayer(null);
   const [mode, setMode] = useState<Mode>('indoor');
   const [status, setStatus] = useState<Status>('idle');
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [result, setResult] = useState<DescribeResult | null>(null);
 
   useEffect(() => {
     // Play warnings even when the phone's silent switch is on.
@@ -66,9 +69,9 @@ export default function App() {
       form.append('image', { uri: photo.uri, name: 'frame.jpg', type: 'image/jpeg' } as any);
       form.append('mode', mode);
 
-      const res = await fetch(`${API_URL}/analyze`, { method: 'POST', body: form });
+      const res = await fetch(`${API_URL}/describe`, { method: 'POST', body: form });
       if (!res.ok) throw new Error(`Server ${res.status}`);
-      const data: AnalyzeResult = await res.json();
+      const data: DescribeResult = await res.json();
       setResult(data);
       setStatus('idle');
 
@@ -78,14 +81,13 @@ export default function App() {
           data.distance_m < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium;
         await Haptics.impactAsync(style);
       }
-      if (data.audio_url) {
-        player.replace({ uri: `${API_URL}${data.audio_url}` });
-        player.play();
-      }
+      // TODO (Juan): play data.audio_b64 (ElevenLabs mp3) when it's not null.
+      Speech.speak(data.sentence);
     } catch (e) {
       console.warn(e);
       setStatus('error');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Speech.speak('No connection. Try again.');
     }
   }
 

@@ -1,6 +1,6 @@
 # [We will decide at some point]
 
-A mobile app that warns blind and low vision users about what's in their path. It works on any phone with no special hardware.
+A mobile app that warns blind and low vision users about what's in their path. It works on any phone with no special hardware, using only the camera.
 
 Most apps only warn about things they can name. This one uses depth to find anything physically in your way, at foot, waist, or head height, and tells you how far away it is and which side it's on.
 
@@ -8,9 +8,11 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Describe mode.** Tap anywhere on the screen. The app takes one photo, finds the closest obstacle in your walking path, and speaks it, for example "chair, about one meter, slightly left" or "obstacle at head height, one meter ahead."
 
-**Sonar mode.** A toggle you leave on while walking. The app checks depth about once a second and plays beeps and haptics that speed up as you get closer. The tone plays from the obstacle's side (left, center, or right). No speech, so you can keep moving.
+**Sonar mode.** A toggle you leave on while walking. The app checks depth about once a second and plays beeps and haptics that speed up as you get closer. The tone plays from the obstacle's side (left, center, or right). No speech, so you can keep moving. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
 **Indoor and outdoor setting.** Applies to both modes. Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors).
+
+**Limits.** This helps with stationary obstacles. It does not replace a cane, and outdoors it does not detect curbs, drop-offs, moving cars, or street crossings.
 
 **Built for VoiceOver.** Every element is labeled, every state is spoken or felt, and a two finger double tap (magic tap) repeats the last warning.
 
@@ -28,6 +30,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 backend/
   main.py           API server and endpoints (Juan)
   pipeline.py       depth, lane logic, detection (Michael)
+  tone.py           makes the left, center, and right sonar tones
   requirements.txt
   .env              API keys, never committed
 app/                Expo app (Agustin for UI, Juan for networking, audio, haptics)
@@ -90,23 +93,24 @@ Check each model card on Hugging Face if a name doesn't load.
 
 ```
 cd backend
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
 
-`requirements.txt` should include fastapi, uvicorn, python-multipart, transformers, torch, pillow, numpy, python-dotenv, and requests.
+You need Python 3.10 or newer (check with `python3 --version`).
 
-`main.py` starts the server itself on port 8000, so `python main.py` is all you need.
+`main.py` starts the server itself on port 8000, so `python main.py` is all you need. Check it with `curl http://localhost:8000/health`.
 
-Put keys in `backend/.env` and never commit it.
+Copy `backend/.env.example` to `backend/.env`, fill in the keys, and never commit it. The keys stay on the backend only, never in the app.
 
 ```
-HF_TOKEN=
 ELEVENLABS_API_KEY=
 ELEVENLABS_VOICE_ID=
 ```
+
+The Hugging Face models are public, so they need no token.
 
 To reach the backend from a phone, run `ngrok http 8000` and share the link.
 
@@ -115,11 +119,12 @@ To reach the backend from a phone, run `ngrok http 8000` and share the link.
 ```
 cd app
 npm install
-npx expo install expo-camera expo-speech expo-haptics expo-av
 npx expo start
 ```
 
-Scan the QR code with Expo Go. Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backend link.
+Scan the QR code with Expo Go. The app uses expo-camera, expo-speech, expo-haptics, and expo-audio (the replacement for expo-av). Add any new package with `npx expo install <package>`, not `npm install`.
+
+Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backend link.
 
 ## Accessibility rules
 
@@ -166,5 +171,7 @@ Scan the QR code with Expo Go. Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ng
 - Figma Best Design
 - GoDaddy Registry domain
 - DEV Writing Challenge (after the event)
+
+**Stretch only.** Voice cloning so warnings use a trusted person's voice (with consent), live sonar with LiDAR on Pro iPhones, and a Tiger Data hazard map. Adobe Prettiest Hack if ahead.
 
 **How it's different.** Apple's distance features only work on Pro iPhones, and other apps only warn about things they can name. Ours works on any phone and warns about anything in your way.

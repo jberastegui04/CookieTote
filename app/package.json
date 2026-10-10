@@ -7,6 +7,7 @@
     "expo-audio": "~57.0.5",
     "expo-camera": "~57.0.6",
     "expo-haptics": "~57.0.3",
+    "expo-speech": "~57.0.3",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.3"
