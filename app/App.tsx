@@ -69,7 +69,12 @@ export default function App() {
       form.append('image', { uri: photo.uri, name: 'frame.jpg', type: 'image/jpeg' } as any);
       form.append('mode', mode);
 
-      const res = await fetch(`${API_URL}/describe`, { method: 'POST', body: form });
+      const res = await fetch(`${API_URL}/describe`, {
+        method: 'POST',
+        body: form,
+        // Without this, ngrok's free plan can answer with an HTML warning page instead of our JSON.
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       const data: DescribeResult = await res.json();
       setResult(data);
