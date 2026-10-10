@@ -24,7 +24,7 @@ depth = pipeline.depth_map(image, mode)
 print(f"photo {image.size[0]}x{image.size[1]}, depth shape {depth.shape}, min {depth.min():.2f} m, max {depth.max():.2f} m")
 
 print(f"{pipeline.PERCENTILE}th percentile per cell (m), warn under {pipeline.WARN_DISTANCE_M[mode]} m:")
-for height, ys in pipeline.BANDS.items():
+for height, ys in pipeline.bands_for(mode).items():
     cells = [np.percentile(depth[pipeline._rows(depth, ys), pipeline._cols(depth, xs)], pipeline.PERCENTILE) for xs in pipeline.COLUMNS.values()]
     print(f"  {height:<6}" + "".join(f"{name}={d:5.2f}  " for name, d in zip(pipeline.COLUMNS, cells)))
 
@@ -35,10 +35,10 @@ vis = Image.fromarray(gray).convert("RGB")
 draw = ImageDraw.Draw(vis)
 w, h = vis.size
 for x in (0.2, 0.4, 0.6, 0.8):
-    draw.line([(x * w, 0), (x * w, pipeline.LANE_Y[1] * h)], fill=(255, 214, 10), width=2)
-for _, (top, bottom) in pipeline.BANDS.items():
+    draw.line([(x * w, 0), (x * w, pipeline.FLOOR_CUTOFF[mode] * h)], fill=(255, 214, 10), width=2)
+for _, (top, bottom) in pipeline.bands_for(mode).items():
     draw.line([(0.2 * w, top * h), (0.8 * w, top * h)], fill=(255, 214, 10), width=2)
-draw.line([(0, pipeline.LANE_Y[1] * h), (w, pipeline.LANE_Y[1] * h)], fill=(255, 60, 60), width=3)  # floor cutoff
+draw.line([(0, pipeline.FLOOR_CUTOFF[mode] * h), (w, pipeline.FLOOR_CUTOFF[mode] * h)], fill=(255, 60, 60), width=3)  # floor cutoff
 out_path = path.with_name(path.stem + "_depth.png")
 vis.save(out_path)
 print(f"saved {out_path}")
