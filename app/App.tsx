@@ -92,8 +92,14 @@ const ALWAYS_SHOW_SETUP = true;
 const PREFS_KEY = 'prefs';
 // The obstacle tag and card clear after this, so an old warning doesn't linger once you've passed it.
 const RESULT_SHOW_MS = 5000;
-// Free ngrok links answer with an HTML warning page unless this header is sent.
-const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+// Free ngrok links answer with an HTML warning page unless this header is sent. X-App-Key lets the
+// public Space tell this app from anyone with the link; it's only checked for adding, renaming and
+// deleting voices (APP_KEY on the server, EXPO_PUBLIC_APP_KEY in app/.env).
+const APP_KEY = process.env.EXPO_PUBLIC_APP_KEY;
+const HEADERS: Record<string, string> = {
+  'ngrok-skip-browser-warning': 'true',
+  ...(APP_KEY ? { 'X-App-Key': APP_KEY } : {}),
+};
 
 // Guide mode: a frame to /sonar about once a second, and a voice that speaks only when the
 // situation changes (open / far / close / stop, with a direction), plus a reminder now and then.

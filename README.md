@@ -112,6 +112,8 @@ Spoken Find request to text (ElevenLabs speech-to-text, `scribe_v2`). Form uploa
 
 A WAV of a guide or find phrase in the chosen voice. Only the app's own phrases are accepted (anything else is a 400), so nobody can make a cloned voice say arbitrary things through the public Space. 503 if ElevenLabs is unavailable, and the app then uses the phone's own voice. Cached by voice and text, so repeated phrases cost nothing.
 
+Adding, renaming and deleting voices need an `X-App-Key` header matching `APP_KEY` on the server (the Space is public; this keeps strangers from deleting the trusted voices). The app sends it from `EXPO_PUBLIC_APP_KEY` in `app/.env`. With no `APP_KEY` set, as on a laptop, the check is off.
+
 ### GET /voices
 
 The voices the app offers, cloned ones first, for example `{"default": "EXAV…", "voices": [{"id": "EXAV…", "name": "Sarah"}, …]}`.

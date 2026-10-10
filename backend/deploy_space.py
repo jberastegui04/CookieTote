@@ -29,7 +29,7 @@ api.create_repo(
 if api.get_space_runtime(SPACE_ID).requested_hardware != SPACE_HARDWARE:
     api.request_space_hardware(SPACE_ID, SPACE_HARDWARE, sleep_time=SLEEP_S)
 
-for name in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
+for name in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "APP_KEY"):
     if os.getenv(name):
         api.add_space_secret(SPACE_ID, name, os.environ[name])
 

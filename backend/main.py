@@ -1,11 +1,12 @@
 import io
+import os
 import time
 from collections import deque
 
 import requests
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -180,7 +181,16 @@ async def voices():
     return {"default": voice.default_voice_id(), "voices": await run_in_threadpool(voice.list_voices)}
 
 
-@app.post("/voices/clone")
+# The Space is public, so changing the voices (clone, rename, delete) needs a key the app sends as
+# X-App-Key (APP_KEY in .env and the Space's secrets, EXPO_PUBLIC_APP_KEY in app/.env). With no
+# APP_KEY set, as on a laptop, everything is open.
+def require_app_key(x_app_key: str | None = Header(None)):
+    expected = os.getenv("APP_KEY")
+    if expected and x_app_key != expected:
+        raise HTTPException(401, "this app isn't allowed to change voices")
+
+
+@app.post("/voices/clone", dependencies=[Depends(require_app_key)])
 async def clone_voice(audio: UploadFile = File(...), consent: str = Form("false"), name: str = Form("")):
     """Clone a trusted person's voice from a short recording. Needs an ElevenLabs plan with cloning."""
     if consent != "true":
@@ -201,7 +211,7 @@ async def clone_voice(audio: UploadFile = File(...), consent: str = Form("false"
         raise HTTPException(502, f"ElevenLabs unreachable: {e}")
 
 
-@app.post("/voices/{voice_id}/name")
+@app.post("/voices/{voice_id}/name", dependencies=[Depends(require_app_key)])
 async def rename_voice(voice_id: str, name: str = Form(...)):
     """Rename a trusted (cloned) voice. The premade voices can't be renamed."""
     name = name.strip()[: voice.NAME_MAX_CHARS]
@@ -215,7 +225,7 @@ async def rename_voice(voice_id: str, name: str = Form(...)):
         raise HTTPException(502, f"ElevenLabs refused the rename: {e}")
 
 
-@app.delete("/voices/{voice_id}")
+@app.delete("/voices/{voice_id}", dependencies=[Depends(require_app_key)])
 async def delete_voice(voice_id: str):
     """Delete a trusted (cloned) voice. The premade voices can't be deleted."""
     try:
