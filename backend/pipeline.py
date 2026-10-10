@@ -18,11 +18,12 @@ DEPTH_MODELS = {
 # Everything below is in fractions of the image, since the depth map can be a different size than the photo.
 # Lane is the middle 60% of the width, split into three columns.
 COLUMNS = {"left": (0.2, 0.4), "ahead": (0.4, 0.6), "right": (0.6, 0.8)}
-# Top to bottom, no overlap. Below 75% is ignored because the floor fills the bottom
-# of the frame at about 1 m when the phone is held forward (tune this).
-BANDS = {"head": (0.0, 1 / 3), "waist": (1 / 3, 0.5), "foot": (0.5, 0.75)}
+# Top to bottom, no overlap, fit to venue photos (tune.py). With the phone at chest height, the top
+# 20% of the frame within 2 m is ceiling, above anyone's head, so it's skipped. Below 75% is
+# ignored because the floor fills the bottom of the frame when the phone tilts down.
+BANDS = {"head": (0.2, 0.4), "waist": (0.4, 0.65), "foot": (0.65, 0.75)}
 LANE_X = (0.2, 0.8)
-LANE_Y = (0.0, 0.75)
+LANE_Y = (0.2, 0.75)
 # Low percentile instead of the minimum so a few noisy pixels can't trigger a warning.
 PERCENTILE = 5
 # Lane pixels this close to the obstacle distance count as part of it for the box.
@@ -30,9 +31,17 @@ BOX_MARGIN_M = 0.3
 # A side only wins if it is this much closer than straight ahead in the same band. Without it,
 # a flat wall flips between left and right because the columns differ by a few centimeters of noise.
 SIDE_MARGIN_M = 0.15
-# The model reads phone photos too far away. Multiply by this to get real meters.
-# 1.0 until we calibrate against photos taken at measured distances.
-DEPTH_SCALE = {"indoor": 1.0, "outdoor": 1.0}
+# Same idea for height: a wall or person fills every band at about the same distance, so
+# head or foot only wins if it is this much closer than waist in the same column.
+BAND_MARGIN_M = 0.3
+# The model reads phone photos about twice as far as they are. Multiply by this to get real meters.
+# Indoor is fit to 12 venue photos with estimated distances (tune.py); refit with measured ones.
+# Outdoor is untested, so it stays uncorrected until we have outdoor photos.
+DEPTH_SCALE = {"indoor": 0.5, "outdoor": 1.0}
+# At or under this, say "very close" instead of a number.
+VERY_CLOSE_M = 0.5
+# Friendlier names for DETR's COCO labels.
+LABEL_NAMES = {"dining table": "table"}
 
 DETECT_MODEL = "facebook/detr-resnet-50"
 # Only trust detections at least this confident.
@@ -75,6 +84,8 @@ def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
                 best = {"distance": d, "direction": direction, "height": height}
     if best["distance"] > WARN_DISTANCE_M[mode]:
         return None
+    if cells[best["direction"], "waist"] - best["distance"] <= BAND_MARGIN_M:
+        best["height"] = "waist"
     # Compare with straight ahead at the same height, so the floor in the foot band doesn't
     # drown out a chair on the left at waist height.
     if cells["ahead", best["height"]] - best["distance"] <= SIDE_MARGIN_M:
@@ -109,7 +120,7 @@ def label_for(image: Image.Image, box: list[float] | None) -> str | None:
         own = (x1 - x0) * (y1 - y0)
         if own > 0 and inter / own >= DETECT_MIN_OVERLAP and inter > best_area:
             best_label, best_area = det["label"], inter
-    return best_label
+    return LABEL_NAMES.get(best_label, best_label)
 
 
 def round_half(meters: float) -> float:
@@ -156,6 +167,12 @@ def to_sentence(label: str | None, distance_m: float | None, direction: str | No
     unit = "meter" if meters == 1 else "meters"
     # "1 meter ahead" reads as one phrase; "1 meter, slightly left" needs the pause.
     where = {"left": ", slightly left", "right": ", slightly right"}.get(direction or "", " ahead")
+    if meters <= VERY_CLOSE_M:
+        how_far = "very close"
+    elif label:
+        how_far = f"about {meters:g} {unit}"
+    else:
+        how_far = f"{meters:g} {unit}"
     if label:
-        return f"{label.capitalize()}, about {meters:g} {unit}{where}"
-    return f"Obstacle at {height} height, {meters:g} {unit}{where}"
+        return f"{label.capitalize()}, {how_far}{where}"
+    return f"Obstacle at {height} height, {how_far}{where}"

@@ -31,7 +31,7 @@ api.upload_folder(
     repo_id=SPACE_ID,
     repo_type="space",
     folder_path=HERE,
-    ignore_patterns=[".env", "venv/*", "__pycache__/*", "*.pyc", "space_README.md", "deploy_space.py", "depth_test.py"],
+    ignore_patterns=[".env", "venv/*", "__pycache__/*", "*.pyc", "space_README.md", "deploy_space.py", "depth_test.py", "tune.py"],
     commit_message="Deploy backend",
 )
 api.upload_file(
