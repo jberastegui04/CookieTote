@@ -104,8 +104,15 @@ const GUIDE_REMIND_CLOSE_MS = 2500;
 // sideways (the guide says "ahead" for things clearly to one side), set this to false.
 const GUIDE_SKIP_PROCESSING = true;
 // "Stop" when straight ahead and this close; "close" under CLOSE_DISTANCE_M in any direction.
+// Both scale with the "Warn me" setting, like the server's warning distance (close / normal / early).
 const STOP_DISTANCE_M = 0.7;
 const CLOSE_DISTANCE_M = 1.2;
+const WARNING_SCALE = { close: 0.75, normal: 1, early: 1.5 } as const;
+type Warning = keyof typeof WARNING_SCALE;
+type Units = 'meters' | 'feet';
+const FEET_PER_METER = 3.281;
+// Settings that may not exist yet in prefs.ts (they're being added); defaults until they do.
+type GuideSettings = { units?: Units; warning?: Warning };
 // "Path looks open" needs this many clear readings in a row, so one noisy frame can't say it.
 const OPEN_STREAK = 2;
 // Find mode: repeat the sentence this often while it hasn't changed, and pulse harder as the
@@ -140,8 +147,14 @@ const arrivalPhrase = (target: string) => `You're there. The ${target} is right 
 type Situation = { key: string; text: string; stop: boolean };
 const OPEN: Situation = { key: 'open', text: 'Path looks open.', stop: false };
 
-function classify(distance: number, direction: Side, open: 'left' | 'right' | null): Situation {
-  if (direction === 'ahead' && distance <= STOP_DISTANCE_M) {
+function classify(
+  distance: number,
+  direction: Side,
+  open: 'left' | 'right' | null,
+  settings: GuideSettings = {},
+): Situation {
+  const scale = WARNING_SCALE[settings.warning ?? 'normal'];
+  if (direction === 'ahead' && distance <= STOP_DISTANCE_M * scale) {
     return {
       key: `stop:${open ?? ''}`,
       text: `Stop. Something right in front of you.${open ? ` More room on the ${open}.` : ''}`,
@@ -149,12 +162,17 @@ function classify(distance: number, direction: Side, open: 'left' | 'right' | nu
     };
   }
   const where = direction === 'ahead' ? 'ahead' : `on your ${direction}`;
-  if (distance <= CLOSE_DISTANCE_M) {
+  if (distance <= CLOSE_DISTANCE_M * scale) {
     return { key: `close:${direction}`, text: `Something close ${where}.`, stop: false };
+  }
+  // backend/main.py only speaks these exact phrases (GUIDE_PHRASES); change both together.
+  if (settings.units === 'feet') {
+    const feet = Math.max(1, Math.min(20, Math.round(distance * FEET_PER_METER)));
+    const unit = feet === 1 ? 'foot' : 'feet';
+    return { key: `far:${direction}:${feet}ft`, text: `Something ${where}, about ${feet} ${unit}.`, stop: false };
   }
   const meters = Math.max(1, Math.min(4, Math.round(distance)));
   const unit = meters === 1 ? 'meter' : 'meters';
-  // backend/main.py only speaks these exact phrases (GUIDE_PHRASES); change both together.
   return { key: `far:${direction}:${meters}`, text: `Something ${where}, about ${meters} ${unit}.`, stop: false };
 }
 
@@ -162,18 +180,19 @@ function classify(distance: number, direction: Side, open: 'left' | 'right' | nu
 const SCANNING = 'Scanning.';
 
 // Phrases worth fetching as soon as guide mode turns on, so the first warning isn't late.
-const COMMON_PHRASES = [
-  OPEN.text,
-  classify(0.5, 'ahead', null).text,
-  classify(0.5, 'ahead', 'left').text,
-  classify(0.5, 'ahead', 'right').text,
-  classify(1, 'ahead', null).text,
-  classify(1, 'left', null).text,
-  classify(1, 'right', null).text,
-  classify(2, 'ahead', null).text,
-  classify(2, 'left', null).text,
-  classify(2, 'right', null).text,
-];
+function commonPhrases(settings: GuideSettings): string[] {
+  const far = settings.units === 'feet' ? [1.52, 2.13, 3.05] : [2, 3]; // 5, 7, 10 feet or 2, 3 meters
+  return [
+    OPEN.text,
+    classify(0.5, 'ahead', null, settings).text,
+    classify(0.5, 'ahead', 'left', settings).text,
+    classify(0.5, 'ahead', 'right', settings).text,
+    classify(1, 'ahead', null, settings).text,
+    classify(1, 'left', null, settings).text,
+    classify(1, 'right', null, settings).text,
+    ...far.flatMap((d) => (['ahead', 'left', 'right'] as Side[]).map((side) => classify(d, side, null, settings).text)),
+  ];
+}
 
 function hashKey(text: string): string {
   let h = 5381;
@@ -480,6 +499,12 @@ export default function App() {
     setPrefs(next);
     setTapHaptics(next.haptics);
     AsyncStorage.setItem(PREFS_KEY, JSON.stringify(next)).catch(() => {});
+  }
+
+  // Units and "Warn me" from Settings, for the guide's own phrases and thresholds.
+  function guideSettings(): GuideSettings {
+    const p = prefsRef.current as Prefs & GuideSettings;
+    return { units: p.units ?? 'meters', warning: p.warning ?? 'normal' };
   }
 
   // Vibration for warnings and the guide, unless turned off in Settings.
@@ -888,7 +913,7 @@ export default function App() {
   }
 
   async function prefetchPhrases() {
-    for (const text of COMMON_PHRASES) {
+    for (const text of commonPhrases(guideSettings())) {
       if (!guideOnRef.current) return;
       await fetchPhrase(text);
     }
@@ -943,7 +968,7 @@ export default function App() {
     // Direction is the majority of the last three readings; distance is always the newest.
     recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
     const side = majority(recentDirections.current);
-    const next = classify(data.distance_m, side, data.open ?? null);
+    const next = classify(data.distance_m, side, data.open ?? null, guideSettings());
     interruptForStop(next);
     situation.current = next;
     // A pulse on every reading, stronger when closer. Never waits on speech.
@@ -968,7 +993,10 @@ export default function App() {
     // An obstacle in the way wins over the target: "Stop" interrupts, "close" just takes the next
     // turn to speak, so you can step around it and let the clock point you back.
     const o = data.obstacle;
-    const danger = !o.clear && o.distance_m !== null ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null) : null;
+    const danger =
+      !o.clear && o.distance_m !== null
+        ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
+        : null;
     if (danger && (danger.stop || danger.key.startsWith('close'))) {
       setFindInfo(data);
       interruptForStop(danger);
