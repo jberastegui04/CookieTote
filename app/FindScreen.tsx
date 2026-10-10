@@ -3,7 +3,7 @@ import { Animated, Easing, StyleSheet, Text, useWindowDimensions, View } from 'r
 import { Tap } from './controls';
 import { formatDistance, type Units } from './prefs';
 import { capitalize, HALF_FOV_DEG, type FindResult } from './find';
-import { useReduceMotion } from './motion';
+import { Enter, useReduceMotion } from './motion';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // The box moves on every gyro reading (about 20 a second) and every server answer. Gliding to each
@@ -104,7 +104,7 @@ export default function FindScreen(p: Props) {
   const large = !p.cameraPicture;
 
   return (
-    <View style={styles.screen} accessibilityViewIsModal>
+    <Enter from="fade" style={styles.screen} accessibilityViewIsModal>
       {/* Drawing only; the find loop speaks the same thing. */}
       <View
         style={StyleSheet.absoluteFill}
@@ -166,7 +166,7 @@ export default function FindScreen(p: Props) {
           <Text style={styles.stopText}>Stop finding</Text>
         </Tap>
       </View>
-    </View>
+    </Enter>
   );
 }
 

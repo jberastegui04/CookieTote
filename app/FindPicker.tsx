@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Caption, Header, LinkRow, Section, Tap } from './controls';
 import { DESCRIPTION_MAX_CHARS, loadFindTargets, targetFromDescription } from './find';
+import { Enter } from './motion';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Props = {
@@ -43,7 +44,7 @@ export default function FindPicker(p: Props) {
   const canSubmit = text.trim().length > 0;
 
   return (
-    <View style={styles.screen} accessibilityViewIsModal>
+    <Enter from="up" style={styles.screen} accessibilityViewIsModal>
       <Header
         title="Find something"
         sub="Say it or type it."
@@ -88,7 +89,7 @@ export default function FindPicker(p: Props) {
         </Tap>
 
       </ScrollView>
-    </View>
+    </Enter>
   );
 }
 

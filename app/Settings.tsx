@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, Tap, ToggleRow, VoiceList } from './controls';
 import type { Prefs } from './prefs';
+import { Enter } from './motion';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Mode = 'auto' | 'indoor' | 'outdoor';
@@ -51,6 +52,18 @@ export default function Settings(p: Props) {
   const [editId, setEditId] = useState<string | null>(null);
   const [naming, setNaming] = useState(false); // the page was opened for a voice just recorded
 
+  // Settings slides up when it opens; coming back to it from a sub-page just fades.
+  const opened = useRef(false);
+  useEffect(() => {
+    opened.current = true;
+  }, []);
+  // Pages opened from a list slide in from the right; going back to the list fades.
+  const lastPage = useRef(page);
+  const backFromEdit = lastPage.current === 'edit';
+  useEffect(() => {
+    lastPage.current = page;
+  }, [page]);
+
   useEffect(() => {
     if (p.newVoiceId && p.voices.some((v) => v.id === p.newVoiceId && v.custom)) {
       setEditId(p.newVoiceId);
@@ -81,7 +94,7 @@ export default function Settings(p: Props) {
         },
       ]);
     return (
-      <View style={styles.screen} accessibilityViewIsModal>
+      <Enter key="edit" from="right" style={styles.screen} accessibilityViewIsModal>
         <Header
           title={unnamed ? 'Name the new voice' : editing.name}
           sub={unnamed ? 'Say it or type it.' : undefined}
@@ -132,14 +145,14 @@ export default function Settings(p: Props) {
             <Text style={styles.deleteText}>Delete this voice</Text>
           </Tap>
         </ScrollView>
-      </View>
+      </Enter>
     );
   }
 
   if (page !== 'main') {
     const own = p.voices.filter((v) => v.custom);
     return (
-      <View style={styles.screen} accessibilityViewIsModal>
+      <Enter key="voice" from={backFromEdit ? 'fade' : 'right'} style={styles.screen} accessibilityViewIsModal>
         <Header
           title="Voice"
           sub="Tap one to hear it."
@@ -171,12 +184,12 @@ export default function Settings(p: Props) {
           />
           <Caption>Only record people who agree. Up to five.</Caption>
         </ScrollView>
-      </View>
+      </Enter>
     );
   }
 
   return (
-    <View style={styles.screen} accessibilityViewIsModal>
+    <Enter key="main" from={opened.current ? 'fade' : 'up'} style={styles.screen} accessibilityViewIsModal>
       <Header title="Settings" onBack={p.onClose} backHint="Returns to the camera" />
       <ScrollView contentContainerStyle={styles.content}>
 
@@ -256,7 +269,7 @@ export default function Settings(p: Props) {
           </Text>
         ) : null}
       </ScrollView>
-    </View>
+    </Enter>
   );
 }
 
