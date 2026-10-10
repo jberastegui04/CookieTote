@@ -5,7 +5,13 @@
 import { HALF_FOV_DEG } from './find';
 
 export type Box = [number, number, number, number]; // x, y, width, height, each 0 to 1 of the frame
-export type Candidate = { box: Box; score: number; bearing_deg: number; distance_m: number | null };
+export type Candidate = {
+  box: Box;
+  score: number;
+  bearing_deg: number;
+  distance_m: number | null;
+  confident?: boolean; // sure enough to count toward a lock (see FIND_CONFIDENT etc. in pipeline.py)
+};
 
 export type Track = {
   world: number; // heading + bearing of the object's center, degrees
@@ -17,13 +23,22 @@ export type Track = {
   lastSeen: number; // ms; when an answer last matched it
   matched: Candidate | null; // the candidate that matched in the latest answer, if any
   pending: { world: number; count: number } | null; // a different object that keeps showing up
+  streak: number; // confident matches in a row
+  locked: boolean; // LOCK_AFTER confident matches in a row: this is the object, for good
 };
 
 export type TrackView = {
   box: Box | null; // null when the object is outside the frame
   bearing_deg: number; // live degrees off center, right is positive (not clamped)
   stale: boolean; // no answer has matched it for a moment: draw it faded
+  locked: boolean;
 };
+
+// Lock-on: after this many confident matches in a row the track is the object. A locked track
+// never switches to another object and coasts on the gyro for LOCKED_COAST_MS through misses; it
+// ends only when Find resets it (lost, stopped) or it coasts out.
+const LOCK_AFTER = 2;
+const LOCKED_COAST_MS = 6000;
 
 // How far each answer moves the track toward what it saw (1 = jump, like before). Adaptive: small
 // differences are noise between answers and get smoothed (BLEND_MIN); a bigger one means the object
@@ -52,6 +67,7 @@ const BIG_WIDTH = 0.5; // box wider than half the frame
 const CLOSE_GATE_DEG = 20;
 
 const isClose = (t: Track) => t.w > BIG_WIDTH || (t.distance !== null && t.distance < CLOSE_M);
+const coastFor = (t: Track) => (t.locked ? LOCKED_COAST_MS : COAST_MS);
 // A different object takes over only after this many answers in a row agree on it.
 const SWITCH_AFTER = 2;
 // Keep showing the box this long after the last match (gyro moves it), faded after STALE_MS.
@@ -71,6 +87,8 @@ function startTrack(c: Candidate, heading: number, now: number): Track {
     lastSeen: now,
     matched: c,
     pending: null,
+    streak: c.confident ? 1 : 0,
+    locked: false,
   };
 }
 
@@ -88,7 +106,7 @@ function cost(t: Track, c: Candidate, heading: number): number | null {
  * (null without a gyro: then positions are frame-relative, which still smooths size and jitter). */
 export function trackUpdate(track: Track | null, candidates: Candidate[], heading: number | null, now: number): Track | null {
   const hd = heading ?? 0;
-  if (!track || now - track.lastSeen > COAST_MS) {
+  if (!track || now - track.lastSeen > coastFor(track)) {
     return candidates.length ? startTrack(candidates[0], hd, now) : null;
   }
   let best: Candidate | null = null;
@@ -111,6 +129,7 @@ export function trackUpdate(track: Track | null, candidates: Candidate[], headin
       Math.abs(best.box[3] - track.h),
     );
     const resize = close ? 1 : blendFor(sizeDiff, 0.02, 0.08);
+    const streak = track.locked ? track.streak : best.confident ? track.streak + 1 : 0;
     return {
       world: wrap(track.world + move * wrap(world - track.world)),
       y: track.y + resize * (best.box[1] - track.y),
@@ -124,11 +143,14 @@ export function trackUpdate(track: Track | null, candidates: Candidate[], headin
       lastSeen: now,
       matched: best,
       pending: null,
+      streak,
+      locked: track.locked || streak >= LOCK_AFTER,
     };
   }
-  // Nothing matched. If the server keeps pointing somewhere else, switch after SWITCH_AFTER answers.
+  // Nothing matched. Locked: keep it (the gyro carries it). Otherwise, if the server keeps pointing
+  // somewhere else, switch after SWITCH_AFTER answers.
   const top = candidates[0];
-  if (top) {
+  if (top && !track.locked) {
     const world = wrap(hd + top.bearing_deg);
     const same = track.pending && Math.abs(wrap(world - track.pending.world)) <= GATE_DEG;
     const count = same ? track.pending!.count + 1 : 1;
@@ -140,7 +162,7 @@ export function trackUpdate(track: Track | null, candidates: Candidate[], headin
 
 /** Where to draw the track right now, from the live gyro heading. Null once it has coasted out. */
 export function trackView(track: Track | null, heading: number | null, now: number): TrackView | null {
-  if (!track || now - track.lastSeen > COAST_MS) return null;
+  if (!track || now - track.lastSeen > coastFor(track)) return null;
   const bearing = wrap(track.world - (heading ?? 0));
   const center = 0.5 + bearing / (2 * HALF_FOV_DEG);
   const inView = center + track.w / 2 > 0 && center - track.w / 2 < 1;
@@ -148,5 +170,6 @@ export function trackView(track: Track | null, heading: number | null, now: numb
     box: inView ? [center - track.w / 2, track.y, track.w, track.h] : null,
     bearing_deg: bearing,
     stale: now - track.lastSeen > STALE_MS,
+    locked: track.locked,
   };
 }

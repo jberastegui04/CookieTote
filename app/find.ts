@@ -21,6 +21,7 @@ export type FindResult = {
   candidates?: { box: [number, number, number, number]; score: number; bearing_deg: number; distance_m: number | null }[];
   obstacle: { clear: boolean; distance_m: number | null; direction: 'left' | 'ahead' | 'right' | null; open: 'left' | 'right' | null };
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
+  locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
 };
 
 // The edge of the frame is about this many degrees off center (CAMERA_HALF_FOV_DEG in pipeline.py).

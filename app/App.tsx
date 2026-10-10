@@ -78,6 +78,7 @@ type FindResult = {
   candidates?: Candidate[]; // every candidate this frame, best first; the tracker follows one
   obstacle: SonarResult;
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
+  locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
 };
 
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
@@ -305,6 +306,8 @@ export default function App() {
   });
   const cameraRef = useRef<CameraView>(null);
   const [fastPictureSize, setFastPictureSize] = useState<string | undefined>(undefined);
+  const fastPictureSizeRef = useRef<string | undefined>(undefined); // same, for the frame loop's timing log
+  fastPictureSizeRef.current = fastPictureSize;
   const player = useAudioPlayer(null);
   const lastClip = useRef<File | null>(null);
   const [mode, setMode] = useState<Mode>('auto');
@@ -365,6 +368,8 @@ export default function App() {
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
+  // Lock-on: a short rising two-note chime (G5, D6) when the tracker locks onto the target.
+  const lockSound = useAudioPlayer(require('./assets/lock.wav'));
   // The guide voice: one phrase at a time, files cached per voice, and the phone's voice as fallback.
   const speechBusy = useRef(false);
   const speakingStop = useRef(false);
@@ -1286,7 +1291,14 @@ export default function App() {
       (data.found && data.box && data.bearing_deg !== null
         ? [{ box: data.box, score: data.match_score ?? 1, bearing_deg: data.bearing_deg, distance_m: data.distance_m }]
         : []);
+    const wasLocked = trackRef.current?.locked ?? false;
     trackRef.current = trackUpdate(trackRef.current, candidates, headingAtCapture, Date.now());
+    if (!wasLocked && trackRef.current?.locked) {
+      // Two confident sightings in a row: it's the object. Success buzz plus the lock chime, once.
+      // Guidance toward it can key off trackRef.current.locked.
+      notify(Haptics.NotificationFeedbackType.Success);
+      lockSound.seekTo(0).then(() => lockSound.play()).catch(() => {});
+    }
     if (data.found && data.bearing_deg !== null) {
       lastFoundAt.current = Date.now();
       lastSentence.current = data.sentence;
@@ -1427,6 +1439,7 @@ export default function App() {
         lastCaptureAt = t0;
         let t1 = t0;
         let t2 = t0;
+        let px = '?'; // the photo's own size: shows whether pictureSize took effect
         let uri: string | null = null;
         try {
           const photo = await cameraRef.current?.takePictureAsync({
@@ -1436,6 +1449,7 @@ export default function App() {
           });
           if (!photo) throw new Error('No photo');
           t1 = Date.now();
+          px = `${photo.width}x${photo.height}`;
           // Sharper frames only in Search; in Approach the target is near and speed matters.
           const sharp =
             findOnRef.current && findPhaseRef.current === 'search' && findBlanks.current >= FIND_BLANKS_FOR_SHARP;
@@ -1469,7 +1483,7 @@ export default function App() {
               const data = (await res.json()) as T;
               const rt = Date.now() - sentAt;
               const srv = (data as { server_ms?: number }).server_ms ?? 0;
-              lastTiming = `gap=${gap} cap=${t1 - t0} shrink=${t2 - t1} rt=${rt} srv=${srv} net=${rt - srv} age=${Date.now() - t0} inflight=${waiting}`;
+              lastTiming = `gap=${gap} cap=${t1 - t0} shrink=${t2 - t1} rt=${rt} srv=${srv} net=${rt - srv} age=${Date.now() - t0} inflight=${waiting} px=${px} size=${fastPictureSizeRef.current ?? 'full'}`;
               noteScene(data);
               if (n <= applied || !isOn()) return;
               applied = n;
@@ -1593,6 +1607,7 @@ export default function App() {
       box: tracked.box,
       distance_m: trackRef.current?.distance ?? findInfo.distance_m,
       stale: tracked.stale,
+      locked: tracked.locked,
     };
   } else if (findOn && findInfo && findInfo.bearing_deg !== null && targetHeading !== null && headingNow !== null) {
     const off = wrapDeg(targetHeading - headingNow);

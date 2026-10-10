@@ -513,6 +513,15 @@ def find(
                 result["match"] = "no"
     depth = depth_job.result()
     candidates = [_locate(d["box"], s, w, h, depth) for d, s in ranked[:FIND_MAX_CANDIDATES]]
+    # Sure enough to lock onto (the app locks after 2 confident matches in a row): a very sure DETR
+    # detection, a strong description match, or a strong open-vocab match that isn't a far-off speck.
+    for c, (d, s) in zip(candidates, ranked):
+        if open_vocab:
+            c["confident"] = s >= OPEN_YES and c["box"][2] * c["box"][3] >= OPEN_MIN_SURE_AREA
+        elif description:
+            c["confident"] = s >= MATCH_YES
+        else:
+            c["confident"] = s >= FIND_CONFIDENT
     if candidates and result["match"] != "no":
         best = candidates[0]
         result.update(
@@ -537,6 +546,11 @@ def find(
 
 
 FIND_MAX_CANDIDATES = 5
+
+
+# DETR's own score for a known target that's sure enough to lock onto (it finds them at 0.7+; real
+# chairs in the venue photos scored 0.98-1.0).
+FIND_CONFIDENT = 0.9
 
 
 def _locate(b: dict, score: float, w: int, h: int, depth: np.ndarray) -> dict:

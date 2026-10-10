@@ -114,10 +114,12 @@ export default function FindScreen(p: Props) {
       >
         {box ? (
           <>
-            <Animated.View style={[styles.glow, boxStyle]} />
-            <Animated.View style={[styles.box, boxStyle]} />
+            {/* Searching: a thin dashed outline, no glow. Locked on: solid, bold, glowing. */}
+            {r?.locked ? <Animated.View style={[styles.glow, boxStyle]} /> : null}
+            <Animated.View style={[styles.box, !r?.locked && styles.boxSearching, boxStyle]} />
             <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop, opacity: r?.stale ? 0.6 : 1 }]}>
               <Text style={styles.tagText}>
+                {r?.locked ? '● ' : ''}
                 {name}
                 {r?.distance_m != null ? ` · ${formatDistance(r.distance_m, p.units)}` : ''}
               </Text>
@@ -235,6 +237,7 @@ const styles = StyleSheet.create({
   stopLarge: { minHeight: 96, borderRadius: 48 },
   stopText: { color: C.onAccent, fontSize: 26, ...font('bold') },
   box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },
+  boxSearching: { borderWidth: 3, borderStyle: 'dashed' },
   glow: {
     position: 'absolute',
     borderWidth: 10,
