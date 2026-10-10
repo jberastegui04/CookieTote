@@ -16,7 +16,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Limits.** This helps with stationary obstacles. It does not replace a cane, and outdoors it does not detect curbs, drop-offs, moving cars, or street crossings.
 
-**Trusted voice.** Record a family member or friend for 30 seconds, with their consent, and warnings play in their voice (ElevenLabs instant cloning). Four premade voices are offered too.
+**Trusted voices.** Record family members or friends for 30 seconds each, with their consent, and warnings play in their voice (ElevenLabs instant cloning). Four premade voices are offered too.
 
 **Built for VoiceOver.** Every element is labeled, every state is spoken or felt, and a two finger double tap (magic tap) repeats the last warning.
 
@@ -118,7 +118,7 @@ The voices the app offers, cloned ones first, for example `{"default": "EXAV…"
 
 ### POST /voices/clone
 
-Form upload: `audio` (a recording of about 30 seconds, m4a or wav) and `consent`, which must be `true`. Makes an ElevenLabs instant clone named "Trusted voice", replacing the previous one, and returns `{"id", "name"}`. Needs an ElevenLabs plan that includes instant voice cloning (Starter or above); on the free plan ElevenLabs refuses and the endpoint returns 502 with the reason.
+Form upload: `audio` (a recording of about 30 seconds, m4a or wav) and `consent`, which must be `true`. Optional `name`. Adds an ElevenLabs instant clone next to the others (up to 5; unnamed ones are "Trusted voice", "Trusted voice 2", ...) and returns `{"id", "name", "custom": true}`. `POST /voices/{id}/name` (form: `name`) renames a trusted voice and `DELETE /voices/{id}` deletes one; both return 404 for the premade voices. `GET /voices` marks trusted voices with `"custom": true`. Needs an ElevenLabs plan that includes instant voice cloning (Starter or above); on the free plan ElevenLabs refuses and the endpoint returns 502 with the reason.
 
 ### GET /voices/{voice_id}/sample.wav
 

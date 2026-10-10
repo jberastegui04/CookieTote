@@ -18,8 +18,11 @@ VOICES = [
     {"id": "JBFqnCBsd6RMkjVDRZzb", "name": "George"},
 ]
 SAMPLE_SENTENCE = "Chair, about 1 meter, slightly left"
-# One cloned voice at a time, recorded in the app from a trusted person who agreed to it.
+# Cloned voices, recorded in the app from trusted people who agreed to it. New ones are named
+# "Trusted voice", "Trusted voice 2", ... until the user renames them in Settings.
 CLONE_NAME = "Trusted voice"
+MAX_CLONES = 5
+NAME_MAX_CHARS = 30
 # Raw 16 kHz audio, wrapped in a WAV below. Plenty for speech, and no decoder delay on the phone.
 SAMPLE_RATE = 16000
 # ElevenLabs clips start speaking almost immediately. The phone's player can clip the first and
@@ -51,20 +54,56 @@ def cloned_voices() -> list[dict]:
 
 
 def list_voices() -> list[dict]:
-    """Cloned voices first, then the premade list."""
-    return cloned_voices() + VOICES
+    """Cloned voices first (custom: true, the app can rename or delete them), then the premade list."""
+    return [{**v, "custom": True} for v in cloned_voices()] + [{**v, "custom": False} for v in VOICES]
 
 
-def clone_voice(audio: bytes, filename: str, content_type: str) -> dict:
-    """Instant voice clone from one recording. Replaces the previous clone. Raises on failure."""
-    for old in cloned_voices():
-        if old["name"] == CLONE_NAME:
-            requests.delete(f"https://api.elevenlabs.io/v1/voices/{old['id']}", headers=_headers(), timeout=5)
+def _clone_name(existing: list[dict]) -> str:
+    taken = {v["name"] for v in existing}
+    n = 1
+    while (name := CLONE_NAME if n == 1 else f"{CLONE_NAME} {n}") in taken:
+        n += 1
+    return name
+
+
+def _custom_id(voice_id: str) -> None:
+    """Raises KeyError unless the id is one of the cloned voices (never touch the premade ones)."""
+    if voice_id not in {v["id"] for v in cloned_voices()}:
+        raise KeyError(voice_id)
+
+
+def rename_voice(voice_id: str, name: str) -> dict:
+    _custom_id(voice_id)
+    # The edit endpoint wants multipart form data; files=(None, value) sends a plain field that way.
+    res = requests.post(
+        f"https://api.elevenlabs.io/v1/voices/{voice_id}/edit",
+        headers=_headers(),
+        files={"name": (None, name)},
+        timeout=10,
+    )
+    res.raise_for_status()
+    return {"id": voice_id, "name": name, "custom": True}
+
+
+def delete_voice(voice_id: str) -> None:
+    _custom_id(voice_id)
+    res = requests.delete(f"https://api.elevenlabs.io/v1/voices/{voice_id}", headers=_headers(), timeout=10)
+    res.raise_for_status()
+    for key in [k for k in _cache if k[0] == voice_id]:
+        del _cache[key]
+
+
+def clone_voice(audio: bytes, filename: str, content_type: str, name: str = "") -> dict:
+    """Instant voice clone from one recording, added next to the others. Raises on failure."""
+    existing = cloned_voices()
+    if len(existing) >= MAX_CLONES:
+        raise VoiceRejected(f"You have {MAX_CLONES} trusted voices. Delete one in Settings first.")
+    name = name.strip()[:NAME_MAX_CHARS] or _clone_name(existing)
     res = requests.post(
         "https://api.elevenlabs.io/v1/voices/add",
         headers=_headers(),
         data={
-            "name": CLONE_NAME,
+            "name": name,
             "description": "Obstacle Alert. Recorded in the app with the speaker's consent.",
             "remove_background_noise": "true",
         },
@@ -85,7 +124,7 @@ def clone_voice(audio: bytes, filename: str, content_type: str) -> dict:
         if isinstance(detail, dict) and detail.get("code") == "voice_access_denied":
             raise VoiceRejected("ElevenLabs flagged this recording. Record a real person in a quiet room.")
         raise
-    return {"id": voice_id, "name": CLONE_NAME}
+    return {"id": voice_id, "name": name, "custom": True}
 
 
 class VoiceRejected(Exception):

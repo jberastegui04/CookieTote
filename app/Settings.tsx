@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, ToggleRow, VoiceList } from './controls';
+import { useEffect, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, Tap, ToggleRow, VoiceList } from './controls';
 import type { Prefs } from './prefs';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Mode = 'auto' | 'indoor' | 'outdoor';
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
-type Voice = { id: string; name: string };
+type Voice = { id: string; name: string; custom?: boolean };
+type Listen = 'idle' | 'listening' | 'working';
 
 type Props = {
   mode: Mode;
@@ -18,9 +19,12 @@ type Props = {
   voices: Voice[];
   voiceId: string | null;
   onPickVoice: (v: Voice) => void;
-  hasTrusted: boolean;
-  trustedName: string;
-  onRenameTrusted: (name: string) => void;
+  onRenameVoice: (id: string, name: string) => void;
+  onDeleteVoice: (id: string) => void;
+  onSayName: () => Promise<string | null>;
+  nameState: Listen;
+  newVoiceId: string | null; // just recorded: open its page so it gets a name
+  onNewVoiceShown: () => void;
   cloneStep: CloneStep;
   onClone: () => void;
   onReplaySetup: () => void;
@@ -28,20 +32,112 @@ type Props = {
 };
 
 const CLONE_LABEL: Record<CloneStep, string> = {
-  idle: 'Record a trusted voice',
+  idle: 'Record a new trusted voice',
   confirm: 'Tap to start recording',
   recording: 'Stop recording',
   uploading: 'Adding the voice…',
 };
 
+const SAY_NAME_LABEL: Record<Listen, string> = {
+  idle: 'Say the name',
+  listening: 'Listening… say it now',
+  working: 'Working it out…',
+};
+
 export default function Settings(p: Props) {
-  // The voice list opens as its own page, like a row in iPhone Settings.
-  const [page, setPage] = useState<'main' | 'voice'>('main');
+  // The voice list opens as its own page, like a row in iPhone Settings, and each trusted voice
+  // opens its own page from there (rename, delete).
+  const [page, setPage] = useState<'main' | 'voice' | 'edit'>('main');
+  const [editId, setEditId] = useState<string | null>(null);
+  const [naming, setNaming] = useState(false); // the page was opened for a voice just recorded
+
+  useEffect(() => {
+    if (p.newVoiceId && p.voices.some((v) => v.id === p.newVoiceId && v.custom)) {
+      setEditId(p.newVoiceId);
+      setNaming(true);
+      setPage('edit');
+      p.onNewVoiceShown();
+    }
+  }, [p.newVoiceId, p.voices]);
   const [showLimits, setShowLimits] = useState(false);
   const [nameFocused, setNameFocused] = useState(false);
   const voiceName = p.voices.find((v) => v.id === p.voiceId)?.name ?? 'Default';
 
-  if (page === 'voice') {
+  const editing = page === 'edit' ? p.voices.find((v) => v.id === editId && v.custom) : undefined;
+
+  if (editing) {
+    // Still has the server's placeholder name ("Trusted voice 2") right after recording.
+    const unnamed = naming && editing.name.startsWith('Trusted voice');
+    const confirmDelete = () =>
+      Alert.alert(`Delete ${editing.name}?`, 'The voice is removed. You can record it again later.', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setPage('voice');
+            p.onDeleteVoice(editing.id);
+          },
+        },
+      ]);
+    return (
+      <View style={styles.screen} accessibilityViewIsModal>
+        <Header
+          title={unnamed ? 'Name the new voice' : editing.name}
+          sub={unnamed ? 'Say it or type it, like "Mom".' : 'A trusted voice you recorded.'}
+          onBack={() => {
+            setNaming(false);
+            setPage('voice');
+          }}
+          backHint="Returns to the voices"
+        />
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Section title="NAME" />
+          <LinkRow
+            label={SAY_NAME_LABEL[p.nameState]}
+            hint='Records for three seconds. Say just the name, like "Mom".'
+            onPress={async () => {
+              const name = await p.onSayName();
+              if (name) p.onRenameVoice(editing.id, name);
+            }}
+            active={p.nameState !== 'idle'}
+          />
+          <Text style={[styles.subLabel, styles.nameLabel]}>Or type it</Text>
+          <TextInput
+            key={editing.name} // refills the box after a spoken rename
+            style={[styles.input, nameFocused && styles.inputFocused]}
+            defaultValue={editing.name}
+            onFocus={() => setNameFocused(true)}
+            onBlur={() => setNameFocused(false)}
+            onEndEditing={(e) => {
+              const name = e.nativeEvent.text.trim();
+              if (name && name !== editing.name) p.onRenameVoice(editing.id, name);
+            }}
+            placeholder="Like Mom"
+            placeholderTextColor={C.ink2}
+            maxLength={30}
+            returnKeyType="done"
+            autoCapitalize="words"
+            accessibilityLabel={`Name, ${editing.name}`}
+            accessibilityHint="Type a new name, or use the microphone key on the keyboard."
+          />
+          <Section title="REMOVE" />
+          <Tap
+            style={styles.delete}
+            onPress={confirmDelete}
+            accessibilityRole="button"
+            accessibilityLabel={`Delete ${editing.name}`}
+            accessibilityHint="Asks before deleting"
+          >
+            <Text style={styles.deleteText}>Delete this voice</Text>
+          </Tap>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (page !== 'main') {
+    const own = p.voices.filter((v) => v.custom);
     return (
       <View style={styles.screen} accessibilityViewIsModal>
         <Header
@@ -50,36 +146,30 @@ export default function Settings(p: Props) {
           onBack={() => setPage('main')}
           backHint="Returns to settings"
         />
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={styles.content}>
           <Section title="VOICES" />
           <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
           <Section title="YOUR OWN" />
+          {own.map((v) => (
+            <LinkRow
+              key={v.id}
+              label={v.name}
+              value="Edit"
+              hint="Rename or delete this voice"
+              onPress={() => {
+                setEditId(v.id);
+                setNaming(false);
+                setPage('edit');
+              }}
+            />
+          ))}
           <LinkRow
             label={CLONE_LABEL[p.cloneStep]}
             hint={p.cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined}
             onPress={p.onClone}
             active={p.cloneStep === 'recording'}
           />
-          {p.hasTrusted ? (
-            <>
-              <Text style={[styles.subLabel, styles.nameLabel]}>Name it</Text>
-              <TextInput
-                style={[styles.input, nameFocused && styles.inputFocused]}
-                defaultValue={p.trustedName}
-                onFocus={() => setNameFocused(true)}
-                onBlur={() => setNameFocused(false)}
-                onEndEditing={(e) => p.onRenameTrusted(e.nativeEvent.text)}
-                placeholder="Trusted voice"
-                placeholderTextColor={C.ink2}
-                maxLength={30}
-                returnKeyType="done"
-                autoCapitalize="words"
-                accessibilityLabel="Name for the trusted voice"
-                accessibilityHint="For example Mom. Shown in the voice list instead of Trusted voice."
-              />
-              <Caption>Leave it empty to go back to "Trusted voice".</Caption>
-            </>
-          ) : null}
+          <Caption>Record family or friends who agreed to it. Up to five voices.</Caption>
         </ScrollView>
       </View>
     );
@@ -188,6 +278,15 @@ const styles = StyleSheet.create({
     ...font('semibold'),
   },
   inputFocused: { borderColor: C.blue, borderWidth: 3 },
+  delete: {
+    minHeight: 72,
+    borderRadius: 36,
+    borderWidth: 2,
+    borderColor: C.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteText: { color: C.ink, fontSize: 22, ...font('bold') },
   subLabel: { color: C.ink, fontSize: 20, marginBottom: SPACE.sm, ...font('bold') },
   screen: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
   // The first section heading adds its own space above, so the content starts close to the band.

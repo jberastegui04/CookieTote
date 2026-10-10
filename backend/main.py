@@ -181,7 +181,7 @@ async def voices():
 
 
 @app.post("/voices/clone")
-async def clone_voice(audio: UploadFile = File(...), consent: str = Form("false")):
+async def clone_voice(audio: UploadFile = File(...), consent: str = Form("false"), name: str = Form("")):
     """Clone a trusted person's voice from a short recording. Needs an ElevenLabs plan with cloning."""
     if consent != "true":
         raise HTTPException(400, "consent must be true: only record a person who has agreed")
@@ -190,7 +190,7 @@ async def clone_voice(audio: UploadFile = File(...), consent: str = Form("false"
         raise HTTPException(400, "recording too short")
     try:
         return await run_in_threadpool(
-            voice.clone_voice, data, audio.filename or "voice.m4a", audio.content_type or "audio/m4a"
+            voice.clone_voice, data, audio.filename or "voice.m4a", audio.content_type or "audio/m4a", name
         )
     except voice.VoiceRejected as e:
         raise HTTPException(422, str(e))
@@ -199,6 +199,32 @@ async def clone_voice(audio: UploadFile = File(...), consent: str = Form("false"
         raise HTTPException(502, f"ElevenLabs refused the clone: {detail}")
     except requests.RequestException as e:
         raise HTTPException(502, f"ElevenLabs unreachable: {e}")
+
+
+@app.post("/voices/{voice_id}/name")
+async def rename_voice(voice_id: str, name: str = Form(...)):
+    """Rename a trusted (cloned) voice. The premade voices can't be renamed."""
+    name = name.strip()[: voice.NAME_MAX_CHARS]
+    if not name:
+        raise HTTPException(400, "name is empty")
+    try:
+        return await run_in_threadpool(voice.rename_voice, voice_id, name)
+    except KeyError:
+        raise HTTPException(404, "not a trusted voice")
+    except requests.RequestException as e:
+        raise HTTPException(502, f"ElevenLabs refused the rename: {e}")
+
+
+@app.delete("/voices/{voice_id}")
+async def delete_voice(voice_id: str):
+    """Delete a trusted (cloned) voice. The premade voices can't be deleted."""
+    try:
+        await run_in_threadpool(voice.delete_voice, voice_id)
+    except KeyError:
+        raise HTTPException(404, "not a trusted voice")
+    except requests.RequestException as e:
+        raise HTTPException(502, f"ElevenLabs refused the delete: {e}")
+    return {"deleted": voice_id}
 
 
 @app.get("/voices/{voice_id}/sample.wav")

@@ -79,15 +79,11 @@ type FindResult = {
 
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
 
-type Voice = { id: string; name: string };
+type Voice = { id: string; name: string; custom?: boolean }; // custom: a trusted voice the user recorded
 // Voice cloning: tap to hear the consent notice, tap again to record, tap again to stop and upload.
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 const CLONE_MAX_MS = 30000;
 const VOICE_KEY = 'voice_id';
-// The server always names the cloned voice this (CLONE_NAME in voice.py) and uses the name to
-// replace it, so a new name chosen in the app is kept on the phone and only changes what's shown.
-const TRUSTED_NAME = 'Trusted voice';
-const TRUSTED_NAME_KEY = 'trusted_name';
 const MODE_KEY = 'mode';
 const CAMERA_KEY = 'camera_picture';
 const SETUP_KEY = 'setup_done';
@@ -257,7 +253,9 @@ export default function App() {
   const [result, setResult] = useState<DescribeResult | null>(null);
   // Voice picker. The list comes from GET /voices; the choice is remembered on the phone.
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [trustedName, setTrustedName] = useState('');
+  // "Say the name" for a trusted voice: same 3 second recording and /transcribe as Find.
+  const [newVoiceId, setNewVoiceId] = useState<string | null>(null); // Settings opens it to be named
+  const [nameState, setNameState] = useState<'idle' | 'listening' | 'working'>('idle');
   const [voiceId, setVoiceId] = useState<string | null>(null);
   const voiceIdRef = useRef<string | null>(null);
   const screenReader = useRef(false);
@@ -365,9 +363,6 @@ export default function App() {
         if (savedCamera === 'off') setCameraPicture(false);
       })
       .catch(() => setSetupDone(false));
-    AsyncStorage.getItem(TRUSTED_NAME_KEY)
-      .then((saved) => saved && setTrustedName(saved))
-      .catch(() => {});
     AsyncStorage.getItem(VOICE_KEY)
       .then((saved) => {
         if (saved) {
@@ -397,18 +392,13 @@ export default function App() {
   }, []);
 
   // If the font fails to load, carry on with the system font rather than a blank screen.
-  const hasTrusted = voices.some((v) => v.name === TRUSTED_NAME);
-  const shownVoices = trustedName
-    ? voices.map((v) => (v.name === TRUSTED_NAME ? { ...v, name: trustedName } : v))
-    : voices;
-
   if (setupDone === null || (!fontsLoaded && !fontError)) return <View style={[styles.screen, styles.blank]} />;
 
   if (!setupDone) {
     return (
       <Setup
         onVision={chooseVision}
-        voices={shownVoices}
+        voices={voices}
         voiceId={voiceId}
         onPickVoice={pickVoice}
         onFinish={finishSetup}
@@ -611,10 +601,92 @@ export default function App() {
     fetchPhrase(SCANNING);
   }
 
-  function renameTrusted(name: string) {
+  async function renameVoice(id: string, name: string) {
     const clean = name.trim().slice(0, 30);
-    setTrustedName(clean);
-    AsyncStorage.setItem(TRUSTED_NAME_KEY, clean).catch(() => {});
+    if (!clean) return;
+    setVoices((prev) => prev.map((v) => (v.id === id ? { ...v, name: clean } : v)));
+    try {
+      const form = new FormData();
+      form.append('name', clean);
+      const res = await fetch(`${API_URL}/voices/${id}/name`, { method: 'POST', body: form, headers: HEADERS });
+      if (!res.ok) throw new Error(`Server ${res.status}`);
+      AccessibilityInfo.announceForAccessibility(`Named ${clean}`);
+    } catch (e) {
+      console.warn(e);
+      await loadVoices().catch(() => {}); // put the old name back
+      notify(Haptics.NotificationFeedbackType.Error);
+      tell('Could not rename the voice. Try again.');
+    }
+  }
+
+  async function deleteVoice(id: string) {
+    const name = voices.find((v) => v.id === id)?.name ?? 'The voice';
+    try {
+      const res = await fetch(`${API_URL}/voices/${id}`, { method: 'DELETE', headers: HEADERS });
+      if (!res.ok) throw new Error(`Server ${res.status}`);
+      sampleFiles.current.delete(id);
+      const data = await loadVoices();
+      // Deleted the voice in use: go back to the default one.
+      if (voiceIdRef.current === id) {
+        voiceIdRef.current = data.default;
+        setVoiceId(data.default);
+        AsyncStorage.setItem(VOICE_KEY, data.default).catch(() => {});
+      }
+      await notify(Haptics.NotificationFeedbackType.Success);
+      AccessibilityInfo.announceForAccessibility(`${name} deleted`);
+    } catch (e) {
+      console.warn(e);
+      notify(Haptics.NotificationFeedbackType.Error);
+      tell('Could not delete the voice. Try again.');
+    }
+  }
+
+  // Records 3 seconds and returns what was said, cleaned up for a name ("mom." -> "Mom"). Null if
+  // nothing was heard. Blind users can also type with VoiceOver or the keyboard's dictation key.
+  async function sayName(): Promise<string | null> {
+    if (nameState !== 'idle') return null;
+    const { granted } = await requestRecordingPermissionsAsync();
+    if (!granted) {
+      tell('Microphone access is needed to say the name.');
+      return null;
+    }
+    setNameState('listening');
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      await buzz(Haptics.ImpactFeedbackStyle.Medium);
+      AccessibilityInfo.announceForAccessibility('Listening');
+      await sleep(3000);
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      await buzz(Haptics.ImpactFeedbackStyle.Light);
+      if (!recorder.uri) throw new Error('No recording');
+      setNameState('working');
+      const form = new FormData();
+      form.append('audio', new File(recorder.uri));
+      const res = await fetch(`${API_URL}/transcribe`, { method: 'POST', body: form, headers: HEADERS });
+      if (!res.ok) throw new Error(`Server ${res.status}`);
+      const data: { text: string } = await res.json();
+      setNameState('idle');
+      const name = data.text
+        .replace(/[.,!?"]/g, '')
+        .trim()
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .slice(0, 30);
+      if (!name) {
+        tell("I didn't catch that. Try again.");
+        return null;
+      }
+      return name;
+    } catch (e) {
+      console.warn(e);
+      setNameState('idle');
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+      notify(Haptics.NotificationFeedbackType.Error);
+      tell('Could not hear the name. Try again, or type it.');
+      return null;
+    }
   }
 
   // One button, three taps: consent notice, start recording, stop and upload.
@@ -683,12 +755,12 @@ export default function App() {
       const added: Voice = await res.json();
       await loadVoices().catch(() => setVoices((prev) => [added, ...prev]));
       chooseVoice(added);
+      setNewVoiceId(added.id);
       setClone('idle');
       await notify(Haptics.NotificationFeedbackType.Success);
-      AccessibilityInfo.announceForAccessibility('Voice added. Playing a sample.');
+      AccessibilityInfo.announceForAccessibility('Voice added. Playing a sample. Then say or type a name for it.');
       Speech.speak('Voice added.');
       await sleep(1200);
-      sampleFiles.current.delete(added.id); // a new recording replaces the old trusted voice
       await playSample(added.id);
     } catch (e) {
       console.warn(e);
@@ -1531,10 +1603,13 @@ export default function App() {
           onCameraPicture={changeCameraPicture}
           prefs={prefs}
           onPrefs={updatePrefs}
-          voices={shownVoices}
-          hasTrusted={hasTrusted}
-          trustedName={trustedName}
-          onRenameTrusted={renameTrusted}
+          voices={voices}
+          onRenameVoice={renameVoice}
+          onDeleteVoice={deleteVoice}
+          onSayName={sayName}
+          newVoiceId={newVoiceId}
+          onNewVoiceShown={() => setNewVoiceId(null)}
+          nameState={nameState}
           voiceId={voiceId}
           onPickVoice={pickVoice}
           cloneStep={cloneStep}
@@ -1614,12 +1689,9 @@ const styles = StyleSheet.create({
   },
   tagText: { color: C.blue, fontSize: 20, ...font('bold') },
   bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm, gap: SPACE.md },
-  // Blue edge on the left ties the card to the Guide button and the outline.
   card: {
     backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 22,
-    borderLeftWidth: 6,
-    borderLeftColor: C.blue,
     paddingHorizontal: GUTTER,
     paddingVertical: SPACE.lg,
   },
