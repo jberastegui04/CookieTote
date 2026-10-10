@@ -8,7 +8,7 @@ import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // The box moves on every gyro reading (about 20 a second) and every server answer. Gliding to each
 // new spot over a bit more than one reading blends them into continuous motion instead of jumps.
-const GLIDE_MS = 120;
+const GLIDE_MS = 80;
 
 // An animated number that glides to `target`. Jumps straight there the first time (so the box
 // doesn't fly in from the corner) and always when Reduce Motion is on.

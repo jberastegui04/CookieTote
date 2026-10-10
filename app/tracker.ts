@@ -25,9 +25,19 @@ export type TrackView = {
   stale: boolean; // no answer has matched it for a moment: draw it faded
 };
 
-// How far each answer moves the track toward what it saw (1 = jump, like before).
-const BLEND = 0.35;
+// How far each answer moves the track toward what it saw (1 = jump, like before). Adaptive: small
+// differences are noise between answers and get smoothed (BLEND_MIN); a bigger one means the object
+// really moved in the frame (you stepped, or first lock-on was rough), so it catches up almost at once.
+const BLEND_MIN = 0.5;
+const BLEND_MAX = 0.85;
+const NOISE_DEG = 2; // differences up to this are treated as jitter
+const FULL_DEG = 6; // at this difference and beyond, blend at BLEND_MAX
 const DISTANCE_BLEND = 0.5;
+
+function blendFor(diff: number, noise: number, full: number) {
+  const t = Math.min(1, Math.max(0, (diff - noise) / (full - noise)));
+  return BLEND_MIN + t * (BLEND_MAX - BLEND_MIN);
+}
 // An answer's candidate is the same object if its center is within this of where the track
 // predicts it, and its size is within this ratio.
 const GATE_DEG = 10;
@@ -35,7 +45,7 @@ const GATE_SIZE_RATIO = 2.5;
 // A different object takes over only after this many answers in a row agree on it.
 const SWITCH_AFTER = 2;
 // Keep showing the box this long after the last match (gyro moves it), faded after STALE_MS.
-const COAST_MS = 2000;
+const COAST_MS = 1500;
 const STALE_MS = 700;
 
 const wrap = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-180, 180]
@@ -80,11 +90,19 @@ export function trackUpdate(track: Track | null, candidates: Candidate[], headin
   }
   if (best) {
     const world = wrap(hd + best.bearing_deg);
+    const move = blendFor(Math.abs(wrap(world - track.world)), NOISE_DEG, FULL_DEG);
+    // Size and height: same idea, in fractions of the frame (0.02 is jitter, 0.08 is a real change).
+    const sizeDiff = Math.max(
+      Math.abs(best.box[1] - track.y),
+      Math.abs(best.box[2] - track.w),
+      Math.abs(best.box[3] - track.h),
+    );
+    const resize = blendFor(sizeDiff, 0.02, 0.08);
     return {
-      world: wrap(track.world + BLEND * wrap(world - track.world)),
-      y: track.y + BLEND * (best.box[1] - track.y),
-      w: track.w + BLEND * (best.box[2] - track.w),
-      h: track.h + BLEND * (best.box[3] - track.h),
+      world: wrap(track.world + move * wrap(world - track.world)),
+      y: track.y + resize * (best.box[1] - track.y),
+      w: track.w + resize * (best.box[2] - track.w),
+      h: track.h + resize * (best.box[3] - track.h),
       distance:
         best.distance_m === null || track.distance === null
           ? best.distance_m ?? track.distance
