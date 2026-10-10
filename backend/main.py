@@ -31,6 +31,16 @@ def decode_image(data: bytes) -> Image.Image:
     return img
 
 
+def log_reading(endpoint: str, img: Image.Image, mode: str, warning: str, result: dict) -> None:
+    """One line per frame in the Space's logs: what was decided, never the image. For tracing a wrong "Stop"."""
+    o = result.get("obstacle", result)
+    obstacle = "clear" if o.get("clear") else f"{o.get('distance_m')}m-{o.get('direction')}"
+    extra = ""
+    if "target" in result:
+        extra = f" found={result['found']} match={result['match']} bearing={result['bearing_deg']} dist={result['distance_m']}"
+    print(f"{endpoint} {img.size[0]}x{img.size[1]} scene={mode} warning={warning} obstacle={obstacle}{extra}", flush=True)
+
+
 async def read_frame(image: UploadFile, mode: str, warning: str, units: str = "meters") -> tuple[Image.Image, str]:
     """Checks the settings, decodes the photo, and resolves mode "auto" to the scene it shows."""
     if mode not in ("indoor", "outdoor", "auto"):
@@ -65,6 +75,7 @@ async def describe(
     # Models run in a worker thread so a sonar frame and a tap don't wait on each other.
     result = await run_in_threadpool(pipeline.describe, img, mode, warning, units)
     result["scene"] = mode
+    log_reading("describe", img, mode, warning, result)
     # Null if ElevenLabs is unavailable, so the app speaks the sentence with expo-speech.
     result["audio_b64"] = await run_in_threadpool(voice.speak_b64, result["sentence"], voice_id)
     return result
@@ -94,6 +105,12 @@ CLOCK_PHRASES = {f"{t.capitalize()} at {h} o'clock." for t in pipeline.FIND_TARG
 # Open-vocabulary targets ("door") can't be listed, so for those the app says "It" instead of the name.
 CLOCK_PHRASES |= {f"It's at {h} o'clock." for h in range(1, 13)}
 ARRIVAL_PHRASES |= {"You're there. It's right in front of you."}
+# Find's two phases: Search (standing still, target only) hands off to Approach (walking, guide + target).
+ARRIVAL_PHRASES |= {
+    "Got it. Walk toward it. I'll warn you about anything in the way.",
+    "Lost it. Stop and turn slowly.",
+    "Stand still while I look.",
+}
 GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES
 
 
@@ -137,6 +154,7 @@ async def find(
     img, mode = await read_frame(image, mode, warning, units)
     result = await run_in_threadpool(pipeline.find, img, mode, target, description, warning, units)
     result["scene"] = mode
+    log_reading("find", img, mode, warning, result)
     return result
 
 
@@ -252,6 +270,7 @@ async def sonar(image: UploadFile = File(...), mode: str = Form("indoor"), warni
     img, mode = await read_frame(image, mode, warning)
     result = await run_in_threadpool(pipeline.sonar, img, mode, warning)
     result["scene"] = mode
+    log_reading("sonar", img, mode, warning, result)
     return result
 
 
