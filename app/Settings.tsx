@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Caption, LinkRow, Section, Segment, SpeedSlider, ToggleRow, VoiceList } from './controls';
-import { tapHaptic } from './feedback';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, ToggleRow, VoiceList } from './controls';
 import type { Prefs } from './prefs';
-import { C, font } from './theme';
+import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Mode = 'indoor' | 'outdoor';
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
@@ -38,27 +37,16 @@ export default function Settings(p: Props) {
   const [showLimits, setShowLimits] = useState(false);
   const voiceName = p.voices.find((v) => v.id === p.voiceId)?.name ?? 'Default';
 
-  const back = (onPress: () => void, hint: string) => (
-    <Pressable
-      style={styles.back}
-      onPress={() => {
-        tapHaptic();
-        onPress();
-      }}
-      accessibilityRole="button" accessibilityLabel="Back" accessibilityHint={hint}>
-      <Text style={styles.backText}>‹ Back</Text>
-    </Pressable>
-  );
-
   if (page === 'voice') {
     return (
       <View style={styles.screen} accessibilityViewIsModal>
+        <Header
+          title="Voice"
+          sub="Reads warnings and guides you while you walk. Tap one to hear it."
+          onBack={() => setPage('main')}
+          backHint="Returns to settings"
+        />
         <ScrollView contentContainerStyle={styles.content}>
-          {back(() => setPage('main'), 'Returns to settings')}
-          <Text style={styles.title} accessibilityRole="header">
-            Voice
-          </Text>
-          <Caption>The voice that reads warnings and guides you while you walk. Tap one to hear it.</Caption>
           <Section title="VOICES" />
           <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
           <Section title="YOUR OWN" />
@@ -75,11 +63,8 @@ export default function Settings(p: Props) {
 
   return (
     <View style={styles.screen} accessibilityViewIsModal>
+      <Header title="Settings" onBack={p.onClose} backHint="Returns to the camera" />
       <ScrollView contentContainerStyle={styles.content}>
-        {back(p.onClose, 'Returns to the camera')}
-        <Text style={styles.title} accessibilityRole="header">
-          Settings
-        </Text>
 
         <Section title="WHERE ARE YOU?" />
         <Segment
@@ -143,17 +128,7 @@ export default function Settings(p: Props) {
 
 const styles = StyleSheet.create({
   screen: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
-  content: { padding: 20, paddingTop: 60, paddingBottom: 60 },
-  back: {
-    alignSelf: 'flex-start',
-    minHeight: 56,
-    paddingHorizontal: 24,
-    borderRadius: 28,
-    borderWidth: 3,
-    borderColor: C.blue,
-    justifyContent: 'center',
-  },
-  backText: { color: C.blue, fontSize: 21, ...font('bold') },
-  title: { color: C.ink, fontSize: 38, marginTop: 16, marginBottom: 4, ...font('heavy') },
-  body: { color: C.ink2, fontSize: 18, lineHeight: 26, marginTop: 6, ...font('regular') },
+  // The first section heading adds its own space above, so the content starts close to the band.
+  content: { paddingHorizontal: GUTTER, paddingTop: SPACE.sm, paddingBottom: SAFE.bottom + SPACE.xxl },
+  body: { color: C.ink2, fontSize: 18, lineHeight: 26, marginTop: SPACE.xs, ...font('regular') },
 });

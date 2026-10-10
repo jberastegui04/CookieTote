@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, Animated, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -23,10 +23,13 @@ import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Settings from './Settings';
+import FindPicker from './FindPicker';
+import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
+import { useReduceMotion } from './motion';
 import Setup, { type Vision } from './Setup';
 import { DEFAULT_PREFS, SPEEDS, type Prefs } from './prefs';
-import { C, font } from './theme';
+import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // Your laptop's address on the same Wi-Fi, set in app/.env (see README).
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
@@ -77,6 +80,8 @@ const VOICE_KEY = 'voice_id';
 const MODE_KEY = 'mode';
 const CAMERA_KEY = 'camera_picture';
 const SETUP_KEY = 'setup_done';
+// For the demo, setup opens on every launch (last choices already selected). Set to false so it only shows once.
+const ALWAYS_SHOW_SETUP = true;
 const PREFS_KEY = 'prefs';
 // The obstacle tag and card clear after this, so an old warning doesn't linger once you've passed it.
 const RESULT_SHOW_MS = 5000;
@@ -216,7 +221,6 @@ export default function App() {
   // Find mode: where a chosen object is. Shares the frame loop and the voice with the guide.
   const [findOn, setFindOn] = useState(false);
   const [findTarget, setFindTarget] = useState<string | null>(null);
-  const [targets, setTargets] = useState<string[]>([]);
   const [showTargets, setShowTargets] = useState(false);
   const [findInfo, setFindInfo] = useState<FindResult | null>(null);
   const findOnRef = useRef(false);
@@ -225,6 +229,8 @@ export default function App() {
   const speechBusy = useRef(false);
   const speakingStop = useRef(false);
   const phraseFiles = useRef(new Map<string, string>());
+  const sampleFiles = useRef(new Map<string, string>()); // voice id -> saved sample WAV
+  const latestSample = useRef<string | null>(null); // only the last voice tapped gets played
 
   // Screens and layout. Settings opens over the camera so the guide keeps working.
   const [showSettings, setShowSettings] = useState(false);
@@ -247,6 +253,25 @@ export default function App() {
     return () => clearTimeout(t);
   }, [result]);
 
+  // While the guide is on, a soft halo pulses around its button. Still (not pulsing) with Reduce Motion.
+  const reduceMotion = useReduceMotion();
+  const halo = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!guideOn || reduceMotion) {
+      halo.stopAnimation();
+      halo.setValue(guideOn ? 0.6 : 0);
+      return;
+    }
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(halo, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(halo, { toValue: 0.2, duration: 900, useNativeDriver: true }),
+      ]),
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [guideOn, reduceMotion]);
+
   useEffect(() => {
     // Play warnings even when the phone's silent switch is on.
     setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
@@ -254,7 +279,7 @@ export default function App() {
     const sub = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => (screenReader.current = on));
     AsyncStorage.multiGet([MODE_KEY, CAMERA_KEY, SETUP_KEY, PREFS_KEY])
       .then(([[, savedMode], [, savedCamera], [, savedSetup], [, savedPrefs]]) => {
-        setSetupDone(savedSetup === '1');
+        setSetupDone(!ALWAYS_SHOW_SETUP && savedSetup === '1');
         if (savedPrefs) {
           const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs) };
           prefsRef.current = loaded;
@@ -371,6 +396,16 @@ export default function App() {
     guideWasOn.current = false;
   }
 
+  // The Find button opens the target picker (FindPicker loads GET /find/targets itself).
+  // Like Settings, it silences the app and pauses the guide.
+  function openFindPicker() {
+    tapHaptic();
+    Speech.stop();
+    player.pause();
+    if (guideOnRef.current) toggleGuide();
+    setShowTargets(true);
+  }
+
   // Short status messages. With VoiceOver on, an interrupting announcement (so it cuts off
   // VoiceOver re-reading the button); otherwise the phone's built-in voice.
   function tell(text: string) {
@@ -436,7 +471,8 @@ export default function App() {
     player.play();
   }
 
-  // Plays the ElevenLabs clip if the backend sent one and Guidance voice is on, otherwise the phone's built-in voice.
+  // Plays the ElevenLabs clip if the backend sent one and Guidance voice is on,
+  // otherwise the phone's built-in voice.
   async function say(data: DescribeResult) {
     Speech.stop();
     if (data.audio_b64 && prefsRef.current.speech) {
@@ -547,7 +583,8 @@ export default function App() {
       AccessibilityInfo.announceForAccessibility('Voice added. Playing a sample.');
       Speech.speak('Voice added.');
       await sleep(1200);
-      await playUri(`${API_URL}/voices/${added.id}/sample.wav`, HEADERS);
+      sampleFiles.current.delete(added.id); // a new recording replaces the old trusted voice
+      await playSample(added.id);
     } catch (e) {
       console.warn(e);
       setClone('idle');
@@ -577,9 +614,27 @@ export default function App() {
   // Picks a voice from the list, plays its sample sentence, and remembers the choice.
   async function pickVoice(v: Voice) {
     chooseVoice(v);
-    quietUntil.current = Date.now() + 1500; // keep the guide quiet while the sample plays
+    await playSample(v.id);
+  }
+
+  // The iPhone player won't stream a WAV from a server without range requests (ours sends the
+  // whole file), so samples are downloaded once per voice and played from the phone.
+  async function playSample(id: string) {
+    latestSample.current = id;
+    quietUntil.current = Date.now() + 3000; // keep the guide quiet while the sample plays
     try {
-      await playUri(`${API_URL}/voices/${v.id}/sample.wav`, HEADERS);
+      let uri = sampleFiles.current.get(id);
+      if (!uri) {
+        const res = await fetch(`${API_URL}/voices/${id}/sample.wav`, { headers: HEADERS });
+        if (!res.ok) throw new Error(`Sample ${res.status}`);
+        const file = new File(Paths.cache, `sample-${hashKey(id)}-${Date.now()}.wav`);
+        file.write(new Uint8Array(await res.arrayBuffer()));
+        uri = file.uri;
+        sampleFiles.current.set(id, uri);
+      }
+      if (latestSample.current !== id) return; // a different voice was tapped while this loaded
+      Speech.stop();
+      await playUri(uri);
     } catch (e) {
       console.warn(e);
     }
@@ -609,26 +664,7 @@ export default function App() {
     }
   }
 
-  // Find mode. Tap Find: pick a target, then frames go to /find until you tap again.
-  async function openTargets() {
-    tapHaptic();
-    if (findOnRef.current) {
-      stopFind();
-      return;
-    }
-    setShowTargets(true);
-    if (targets.length === 0) {
-      try {
-        const res = await fetch(`${API_URL}/find/targets`, { headers: HEADERS });
-        setTargets(((await res.json()) as { targets: string[] }).targets);
-      } catch (e) {
-        console.warn(e);
-        tell('Could not load the list. Try again.');
-        setShowTargets(false);
-      }
-    }
-  }
-
+  // Find mode: pick a target in FindPicker, then frames go to /find until Stop finding.
   function startFind(target: string) {
     setShowTargets(false);
     if (guideOnRef.current) toggleGuide();
@@ -985,7 +1021,7 @@ export default function App() {
   const topBar = (
     <View style={styles.topBar} pointerEvents="box-none">
       <Pressable
-        style={[styles.chip, !cameraPicture && styles.chipLarge]}
+        style={({ pressed }) => [styles.chip, !cameraPicture && styles.chipLarge, pressed && styles.pressed]}
         onPress={() => {
           tapHaptic();
           changeMode(mode === 'indoor' ? 'outdoor' : 'indoor');
@@ -997,7 +1033,7 @@ export default function App() {
         <Text style={styles.chipText}>{mode === 'indoor' ? 'Indoor' : 'Outdoor'}</Text>
       </Pressable>
       <Pressable
-        style={[styles.chip, !cameraPicture && styles.chipLarge]}
+        style={({ pressed }) => [styles.chip, !cameraPicture && styles.chipLarge, pressed && styles.pressed]}
         onPress={openSettings}
         accessibilityRole="button"
         accessibilityLabel="Settings"
@@ -1009,9 +1045,24 @@ export default function App() {
   );
 
   const guideButton = (
-    <View style={styles.buttons}>
+    <View>
+      {guideOn ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.halo,
+            !cameraPicture && styles.haloLarge,
+            { opacity: halo.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] }) },
+          ]}
+        />
+      ) : null}
       <Pressable
-        style={[styles.guide, guideOn ? styles.guideOn : styles.guideOff, !cameraPicture && styles.guideLarge]}
+        style={({ pressed }) => [
+          styles.guide,
+          guideOn ? styles.guideOn : styles.guideOff,
+          !cameraPicture && styles.guideLarge,
+          pressed && styles.pressed,
+        ]}
         onPress={toggleGuide}
         accessibilityRole="switch"
         accessibilityState={{ checked: guideOn }}
@@ -1019,55 +1070,31 @@ export default function App() {
         accessibilityHint="A voice tells you about obstacles while you walk. Walk slowly while it's on."
       >
         <Text style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}>
-          {guideOn ? 'Guide on' : 'Guide'}
-        </Text>
-      </Pressable>
-      <Pressable
-        style={[styles.guide, findOn ? styles.guideOn : styles.guideOff, !cameraPicture && styles.guideLarge]}
-        onPress={openTargets}
-        accessibilityRole="switch"
-        accessibilityState={{ checked: findOn }}
-        accessibilityLabel={findOn ? `Finding ${findTarget}` : 'Find'}
-        accessibilityHint={findOn ? 'Double tap to stop finding' : 'Pick an object and the voice tells you where it is'}
-      >
-        <Text style={[styles.guideText, findOn ? styles.guideTextOn : styles.guideTextOff]} numberOfLines={1}>
-          {findOn ? `Finding ${findTarget}` : 'Find'}
+          {guideOn ? 'Guide on' : 'Guide off'}
         </Text>
       </Pressable>
     </View>
   );
 
-  const targetPicker = showTargets ? (
-    <View style={styles.picker} accessibilityViewIsModal>
-      <Text style={styles.pickerTitle} accessibilityRole="header">
-        Find what?
-      </Text>
-      <View style={styles.pickerList}>
-        {targets.length === 0 ? <Text style={styles.pickerHint}>Loading the list…</Text> : null}
-        {targets.map((t) => (
-          <Pressable
-            key={t}
-            style={styles.pickerItem}
-            onPress={() => startFind(t)}
-            accessibilityRole="button"
-            accessibilityLabel={t}
-            accessibilityHint={`Starts finding the nearest ${t}`}
-          >
-            <Text style={styles.pickerItemText}>{capitalize(t)}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Pressable
-        style={styles.pickerCancel}
-        onPress={() => setShowTargets(false)}
-        accessibilityRole="button"
-        accessibilityLabel="Cancel"
-        accessibilityHint="Closes the list"
-      >
-        <Text style={styles.pickerCancelText}>Cancel</Text>
-      </Pressable>
+  const findButton = (
+    <Pressable
+      style={({ pressed }) => [styles.guide, styles.guideOff, styles.find, !cameraPicture && styles.guideLarge, pressed && styles.pressed]}
+      onPress={openFindPicker}
+      accessibilityRole="button"
+      accessibilityLabel="Find"
+      accessibilityHint="Pick something to find, like a chair. A voice tells you which way to turn."
+    >
+      <Text style={[styles.guideText, styles.guideTextOff]}>Find</Text>
+    </Pressable>
+  );
+
+  // Guide and Find side by side, the two things you start while walking.
+  const modeButtons = (
+    <View style={styles.modeRow}>
+      <View style={styles.modeCell}>{guideButton}</View>
+      {findButton}
     </View>
-  ) : null;
+  );
 
   return (
     <View
@@ -1077,7 +1104,7 @@ export default function App() {
         if (e.nativeEvent.actionName === 'magicTap') repeatLast();
       }}
     >
-      <StatusBar style={cameraPicture && !showSettings ? 'light' : 'dark'} />
+      <StatusBar style={cameraPicture || showSettings || showTargets || findOn ? 'light' : 'dark'} />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
       {/* Camera picture off: cover the preview. The camera still runs underneath. */}
       {!cameraPicture ? <View style={styles.cover} pointerEvents="none" /> : null}
@@ -1092,7 +1119,9 @@ export default function App() {
         accessibilityState={{ busy: status === 'capturing' || status === 'thinking' }}
       />
 
-      {cameraPicture ? (
+      {findOn && findTarget ? (
+        <FindScreen target={findTarget} result={findInfo} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
+      ) : cameraPicture ? (
         <>
           {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}
           <View
@@ -1107,7 +1136,7 @@ export default function App() {
               <>
                 <View style={[styles.glow, box]} />
                 <View style={[styles.box, box]} />
-                <View style={[styles.tag, { left: box.left, top: Math.max(110, box.top - 48) }]}>
+                <View style={[styles.tag, { left: box.left, top: Math.max(SAFE.top + 72, box.top - 48) }]}>
                   <Text style={styles.tagText}>
                     {label ?? 'Obstacle'}
                     {distance != null ? ` · ${distance.toFixed(1)} m` : ''}
@@ -1130,7 +1159,7 @@ export default function App() {
               </Text>
               {detail ? <Text style={styles.detail}>{detail}</Text> : null}
             </View>
-            {guideButton}
+            {modeButtons}
           </View>
         </>
       ) : (
@@ -1158,12 +1187,11 @@ export default function App() {
                 </Text>
               ) : null}
             </View>
-            {guideButton}
+            {modeButtons}
           </View>
         </>
       )}
 
-      {targetPicker}
       {showSettings ? (
         <Settings
           mode={mode}
@@ -1181,6 +1209,8 @@ export default function App() {
           onClose={closeSettings}
         />
       ) : null}
+
+      {showTargets ? <FindPicker onPick={startFind} onClose={() => setShowTargets(false)} /> : null}
     </View>
   );
 }
@@ -1205,9 +1235,9 @@ const styles = StyleSheet.create({
   bottomShade: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 320 },
   topBar: {
     position: 'absolute',
-    top: 54,
-    left: 20,
-    right: 20,
+    top: SAFE.top + SPACE.sm,
+    left: GUTTER,
+    right: GUTTER,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
@@ -1242,43 +1272,48 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tagText: { color: C.blue, fontSize: 20, ...font('bold') },
-  bottom: { position: 'absolute', left: 20, right: 20, bottom: 40, gap: 12 },
-  card: { backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 22, paddingHorizontal: 20, paddingVertical: 16 },
+  bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm, gap: SPACE.md },
+  // Blue edge on the left ties the card to the Guide button and the outline.
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderRadius: 22,
+    borderLeftWidth: 6,
+    borderLeftColor: C.blue,
+    paddingHorizontal: GUTTER,
+    paddingVertical: SPACE.lg,
+  },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.9 },
+  halo: {
+    position: 'absolute',
+    top: -8,
+    bottom: -8,
+    left: -8,
+    right: -8,
+    borderRadius: 46,
+    backgroundColor: C.bright,
+  },
+  haloLarge: { borderRadius: 56 },
   headline: { color: C.blue, fontSize: 34, ...font('bold') },
   headlineNumber: { fontSize: 56, ...font('heavy') },
-  detail: { color: C.ink2, fontSize: 18, marginTop: 2, ...font('semibold') },
-  buttons: { flexDirection: 'row', gap: 12 },
-  guide: { flex: 1, minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  picker: { ...StyleSheet.absoluteFill, backgroundColor: C.bg, padding: 20, paddingTop: 70 },
-  pickerTitle: { color: C.ink, fontSize: 34, marginBottom: 12, ...font('heavy') },
-  pickerHint: { color: C.ink2, fontSize: 20, ...font('regular') },
-  pickerList: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignContent: 'flex-start' },
-  pickerItem: {
-    minHeight: 64,
-    paddingHorizontal: 22,
-    borderRadius: 32,
-    backgroundColor: C.blue,
-    justifyContent: 'center',
-  },
-  pickerItemText: { color: '#fff', fontSize: 22, ...font('bold') },
-  pickerCancel: {
-    minHeight: 72,
-    borderRadius: 36,
-    borderWidth: 3,
-    borderColor: C.blue,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-  },
-  pickerCancelText: { color: C.blue, fontSize: 24, ...font('bold') },
+  detail: { color: C.ink2, fontSize: 18, marginTop: SPACE.xs, ...font('semibold') },
+  guide: { minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   guideLarge: { minHeight: 96, borderRadius: 48 },
+  find: { flex: 1 },
+  modeRow: { flexDirection: 'row', gap: SPACE.md },
+  modeCell: { flex: 1 },
   guideOn: { backgroundColor: C.blue },
   guideOff: { backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 2, borderColor: C.blue },
   guideText: { fontSize: 26, ...font('bold') },
   guideTextOn: { color: '#fff' },
   guideTextOff: { color: C.blue },
-  large: { ...StyleSheet.absoluteFill, paddingTop: 130, paddingHorizontal: 20, paddingBottom: 40 },
-  largeMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  // Below the top chips (48 tall), above the home indicator.
+  large: {
+    ...StyleSheet.absoluteFill,
+    paddingTop: SAFE.top + SPACE.sm + 48 + SPACE.xl,
+    paddingHorizontal: GUTTER,
+    paddingBottom: SAFE.bottom + SPACE.sm,
+  },
+  largeMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: SPACE.sm },
   largeLabel: { color: C.ink, fontSize: 34, ...font('bold') },
   largeHeadline: { color: C.blue, fontSize: 56, textAlign: 'center', ...font('heavy') },
   largeNumber: { fontSize: 120 },

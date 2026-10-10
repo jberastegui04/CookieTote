@@ -1,10 +1,83 @@
-import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState, type ReactNode } from 'react';
+import { Pressable, StyleSheet, Text, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { notchHaptic, tapHaptic } from './feedback';
 import { SPEEDS } from './prefs';
-import { C, font } from './theme';
+import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // Shared pieces for Settings and the first-launch setup, so both look the same.
+
+// A button that gives a light haptic and shrinks a little while pressed, so a press is felt and seen.
+export function Tap({
+  onPress,
+  style,
+  children,
+  ...rest
+}: Omit<PressableProps, 'style' | 'onPress' | 'children'> & {
+  onPress: () => void;
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  return (
+    <Pressable
+      {...rest}
+      onPress={() => {
+        tapHaptic();
+        onPress();
+      }}
+      style={({ pressed }) => [style, pressed && s.pressed]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+// The blue band at the top of setup steps and Settings: back button, step count, title.
+export function Header(p: {
+  title: string;
+  sub?: string;
+  onBack?: () => void;
+  backHint?: string;
+  step?: number;
+  steps?: number;
+}) {
+  return (
+    <View style={s.band}>
+      {p.onBack != null || p.step != null ? (
+        <View style={s.bandRow}>
+          {p.onBack ? (
+            <Tap
+              style={s.bandBack}
+              onPress={p.onBack}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              accessibilityHint={p.backHint}
+            >
+              <Text style={s.bandBackText}>‹ Back</Text>
+            </Tap>
+          ) : (
+            <View />
+          )}
+          {p.step ? (
+            <Text style={s.bandStep}>
+              Step {p.step} of {p.steps}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {p.step && p.steps ? (
+        <View style={s.progress} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+          {Array.from({ length: p.steps }, (_, i) => (
+            <View key={i} style={[s.progressBar, i < p.step! && s.progressOn]} />
+          ))}
+        </View>
+      ) : null}
+      <Text style={[s.bandTitle, (p.onBack != null || p.step != null) && s.bandTitleSpaced]} accessibilityRole="header">
+        {p.title}
+      </Text>
+      {p.sub ? <Text style={s.bandSub}>{p.sub}</Text> : null}
+    </View>
+  );
+}
 
 export function Section({ title }: { title: string }) {
   return (
@@ -30,7 +103,7 @@ export function Segment<T extends string>(p: {
         return (
           <Pressable
             key={o.value}
-            style={[s.segItem, on && s.segOn]}
+            style={({ pressed }) => [s.segItem, on && s.segOn, pressed && s.pressed]}
             onPress={() => {
               tapHaptic();
               p.onChange(o.value);
@@ -51,7 +124,7 @@ export function Segment<T extends string>(p: {
 export function ToggleRow(p: { label: string; hint: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
     <Pressable
-      style={s.row}
+      style={({ pressed }) => [s.row, pressed && s.pressed]}
       onPress={() => {
         tapHaptic();
         p.onChange(!p.value);
@@ -75,7 +148,7 @@ export function ToggleRow(p: { label: string; hint: string; value: boolean; onCh
 export function LinkRow(p: { label: string; hint?: string; value?: string; onPress: () => void; active?: boolean }) {
   return (
     <Pressable
-      style={[s.row, p.active && s.rowActive]}
+      style={({ pressed }) => [s.row, p.active && s.rowActive, pressed && s.pressed]}
       onPress={() => {
         tapHaptic();
         p.onPress();
@@ -106,7 +179,7 @@ export function VoiceList(p: {
         return (
           <Pressable
             key={v.id}
-            style={[s.row, on && s.rowActive]}
+            style={({ pressed }) => [s.row, on && s.rowSelected, pressed && s.pressed]}
             onPress={() => {
               tapHaptic();
               p.onPick(v);
@@ -194,8 +267,8 @@ export function SpeedSlider(p: { value: number; onChange: (i: number) => void })
 }
 
 const s = StyleSheet.create({
-  section: { color: C.blue, fontSize: 18, letterSpacing: 0.5, marginTop: 24, marginBottom: 10, ...font('bold') },
-  caption: { color: C.ink2, fontSize: 18, marginTop: 4, marginBottom: 6, lineHeight: 24, ...font('regular') },
+  section: { color: C.blue, fontSize: 18, letterSpacing: 0.5, marginTop: SPACE.xxl, marginBottom: SPACE.md, ...font('bold') },
+  caption: { color: C.ink2, fontSize: 18, marginTop: SPACE.sm, lineHeight: 24, ...font('regular') },
   segment: {
     flexDirection: 'row',
     backgroundColor: C.card,
@@ -204,7 +277,6 @@ const s = StyleSheet.create({
     borderRadius: 18,
     padding: 4,
     minHeight: 72,
-    marginBottom: 6,
   },
   segItem: { flex: 1, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   segOn: { backgroundColor: C.blue },
@@ -220,9 +292,36 @@ const s = StyleSheet.create({
     borderRadius: 18,
     minHeight: 72,
     paddingHorizontal: 20,
-    marginBottom: 10,
+    marginBottom: SPACE.md,
   },
   rowActive: { borderColor: C.blue, borderWidth: 3 },
+  rowSelected: { borderColor: C.blue, borderWidth: 3, backgroundColor: C.tint },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.9 },
+  band: {
+    backgroundColor: C.blue,
+    paddingTop: SAFE.top + SPACE.lg,
+    paddingHorizontal: GUTTER,
+    paddingBottom: SPACE.xl,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+  },
+  bandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  bandBack: {
+    minHeight: 56,
+    paddingHorizontal: 24,
+    borderRadius: 28,
+    borderWidth: 3,
+    borderColor: '#fff',
+    justifyContent: 'center',
+  },
+  bandBackText: { color: '#fff', fontSize: 21, ...font('bold') },
+  bandStep: { color: '#fff', fontSize: 18, ...font('semibold') },
+  progress: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.xl },
+  progressBar: { flex: 1, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.4)' },
+  progressOn: { backgroundColor: '#fff' },
+  bandTitle: { color: '#fff', fontSize: 34, lineHeight: 40, ...font('heavy') },
+  bandTitleSpaced: { marginTop: SPACE.xl },
+  bandSub: { color: '#fff', fontSize: 19, lineHeight: 26, marginTop: SPACE.sm, ...font('regular') },
   rowLabel: { color: C.ink, fontSize: 21, flexShrink: 1, ...font('semibold') },
   rowValue: { color: C.blue, fontSize: 20, ...font('bold') },
   switchWrap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -250,8 +349,8 @@ const s = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: 18,
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    marginBottom: 10,
+    paddingVertical: SPACE.lg,
+    marginBottom: SPACE.md,
   },
   sliderHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sliderCaption: { color: C.ink2, fontSize: 17, marginTop: 4, ...font('regular') },

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
-import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Caption, Section, Segment, ToggleRow, VoiceList } from './controls';
+import { Caption, Header, Section, Segment, Tap, ToggleRow, VoiceList } from './controls';
 import type { Prefs } from './prefs';
-import { tapHaptic } from './feedback';
-import { C, font } from './theme';
+import { useReduceMotion } from './motion';
+import Logo from './Logo';
+import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Mode = 'indoor' | 'outdoor';
 type Voice = { id: string; name: string };
@@ -25,74 +26,76 @@ type Props = {
 // First launch: a welcome screen, then three short steps. Each choice can be changed later in Settings.
 export default function Setup(p: Props) {
   const [step, setStep] = useState(0);
+  const reduceMotion = useReduceMotion();
+  // Each step fades and rises in a little. Skipped when Reduce Motion is on.
+  const enter = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     const titles = ['Welcome', 'Step 1 of 3. How much can you see?', 'Step 2 of 3. Where will you use it?', 'Step 3 of 3. How should it alert you?'];
     AccessibilityInfo.announceForAccessibility(titles[step]);
+    if (reduceMotion) {
+      enter.setValue(1);
+      return;
+    }
+    enter.setValue(0);
+    Animated.timing(enter, { toValue: 1, duration: 240, useNativeDriver: true }).start();
   }, [step]);
+
+  const fadeIn = {
+    flex: 1,
+    opacity: enter,
+    transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+  };
 
   if (step === 0) {
     return (
       <View style={styles.screen}>
-        <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.content}>
-          <View style={styles.icon} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-            <View style={styles.iconRing}>
-              <View style={styles.iconDot} />
+        <StatusBar style="light" />
+        <Animated.View style={fadeIn}>
+          <ScrollView bounces={false} contentContainerStyle={styles.welcome}>
+            <View style={styles.hero}>
+              <Logo inverse width={128} />
+              <Text style={styles.appName} accessibilityRole="header">
+                WatchIt
+              </Text>
+              <Text style={styles.tagline}>Hear what's in your path.</Text>
             </View>
+            <View style={styles.body}>
+              {[
+                ['Tap anywhere', "Hear what's ahead and how far."],
+                ['Turn on Guide', 'A voice tells you what is ahead as you walk.'],
+                ['Two-finger double tap', 'Repeats the last warning.'],
+              ].map(([t, b]) => (
+                <View key={t} style={styles.howTo} accessible>
+                  <View style={styles.accent} />
+                  <View style={styles.howToText}>
+                    <Text style={styles.howToTitle}>{t}</Text>
+                    <Text style={styles.howToBody}>{b}</Text>
+                  </View>
+                </View>
+              ))}
+              <Text style={styles.footnote}>
+                Not a cane replacement. Does not detect curbs, drop-offs, or moving cars.
+              </Text>
+            </View>
+          </ScrollView>
+          <View style={styles.footer}>
+            <BigButton label="Get started" hint="Starts a three step setup" onPress={() => setStep(1)} />
           </View>
-          <Text style={styles.appName} accessibilityRole="header">
-            WatchIt
-          </Text>
-          <Text style={styles.tagline}>Hear what's in your path.</Text>
-          {[
-            ['Tap anywhere', "Hear what's ahead and how far."],
-            ['Turn on Guide', 'A voice tells you what is ahead as you walk.'],
-            ['Two-finger double tap', 'Repeats the last warning.'],
-          ].map(([t, b]) => (
-            <View key={t} style={styles.howTo} accessible>
-              <Text style={styles.howToTitle}>{t}</Text>
-              <Text style={styles.howToBody}>{b}</Text>
-            </View>
-          ))}
-          <Text style={styles.footnote}>
-            Not a cane replacement. Does not detect curbs, drop-offs, or moving cars.
-          </Text>
-        </ScrollView>
-        <View style={styles.footer}>
-          <BigButton label="Get started" hint="Starts a three step setup" onPress={() => setStep(1)} />
-        </View>
+        </Animated.View>
       </View>
     );
   }
 
   const header = (title: string, sub: string) => (
-    <>
-      <View style={styles.headRow}>
-        <Pressable
-          style={styles.back}
-          onPress={() => {
-            tapHaptic();
-            setStep(step - 1);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          accessibilityHint="Goes to the previous step"
-        >
-          <Text style={styles.backText}>‹ Back</Text>
-        </Pressable>
-        <Text style={styles.stepCount}>Step {step} of 3</Text>
-      </View>
-      <View style={styles.progress} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        {[1, 2, 3].map((i) => (
-          <View key={i} style={[styles.progressBar, i <= step && styles.progressOn]} />
-        ))}
-      </View>
-      <Text style={styles.title} accessibilityRole="header">
-        {title}
-      </Text>
-      <Text style={styles.sub}>{sub}</Text>
-    </>
+    <Header
+      title={title}
+      sub={sub}
+      onBack={() => setStep(step - 1)}
+      backHint="Goes to the previous step"
+      step={step}
+      steps={3}
+    />
   );
 
   if (step === 1) {
@@ -102,26 +105,27 @@ export default function Setup(p: Props) {
     ];
     return (
       <View style={styles.screen}>
-        <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.content}>
-          {header('How much can you see?', 'Tap one. You can change it later in Settings.')}
-          {choices.map((c) => (
-            <Pressable
-              key={c.v}
-              style={styles.choice}
-              onPress={() => {
-                tapHaptic();
-                p.onVision(c.v);
-                setStep(2);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={c.label}
-              accessibilityHint={c.hint}
-            >
-              <Text style={styles.choiceText}>{c.label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+        <StatusBar style="light" />
+        {header('How much can you see?', 'Tap one. You can change it later in Settings.')}
+        <Animated.View style={fadeIn}>
+          <ScrollView contentContainerStyle={styles.content}>
+            {choices.map((c) => (
+              <Tap
+                key={c.v}
+                style={styles.choice}
+                onPress={() => {
+                  p.onVision(c.v);
+                  setStep(2);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={c.label}
+                accessibilityHint={c.hint}
+              >
+                <Text style={styles.choiceText}>{c.label}</Text>
+              </Tap>
+            ))}
+          </ScrollView>
+        </Animated.View>
       </View>
     );
   }
@@ -129,150 +133,99 @@ export default function Setup(p: Props) {
   if (step === 2) {
     return (
       <View style={styles.screen}>
-        <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.content}>
-          {header('Where will you use it?', 'This sets how far ahead it warns you.')}
-          <Segment
-            value={p.mode}
-            onChange={p.onMode}
-            options={[
-              { value: 'indoor', label: 'Indoor', hint: 'Warns at about 2 meters' },
-              { value: 'outdoor', label: 'Outdoor', hint: 'Warns at about 4 meters' },
-            ]}
-          />
-          <Caption>Indoor warns at about 2 m. Outdoor warns at about 4 m.</Caption>
-        </ScrollView>
-        <View style={styles.footer}>
-          <BigButton label="Continue" hint="Goes to step 3" onPress={() => setStep(3)} />
-        </View>
+        <StatusBar style="light" />
+        {header('Where will you use it?', 'This sets how far ahead it warns you.')}
+        <Animated.View style={fadeIn}>
+          <ScrollView contentContainerStyle={styles.content}>
+            <Segment
+              value={p.mode}
+              onChange={p.onMode}
+              options={[
+                { value: 'indoor', label: 'Indoor', hint: 'Warns at about 2 meters' },
+                { value: 'outdoor', label: 'Outdoor', hint: 'Warns at about 4 meters' },
+              ]}
+            />
+            <Caption>Indoor warns at about 2 m. Outdoor warns at about 4 m.</Caption>
+          </ScrollView>
+          <View style={styles.footer}>
+            <BigButton label="Continue" hint="Goes to step 3" onPress={() => setStep(3)} />
+          </View>
+        </Animated.View>
       </View>
     );
   }
 
   return (
     <View style={styles.screen}>
-      <StatusBar style="dark" />
-      <ScrollView contentContainerStyle={styles.content}>
-        {header('How should it alert you?', 'Turn on what helps. Try a sample below.')}
-        <ToggleRow
-          label="Guidance voice"
-          hint="When off, the phone's own voice reads warnings instead"
-          value={p.prefs.speech}
-          onChange={(v) => p.onPrefs({ speech: v })}
-        />
-        <ToggleRow
-          label="Haptics"
-          hint="Vibrates for warnings and the guide"
-          value={p.prefs.haptics}
-          onChange={(v) => p.onPrefs({ haptics: v })}
-        />
-        <Section title="VOICE" />
-        <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
-        <Caption>You can add a trusted person's voice later, in Settings.</Caption>
-        {p.voices.length > 0 ? (
-          <Pressable
-            style={styles.sample}
-            onPress={() => {
-              tapHaptic();
-              const current = p.voices.find((v) => v.id === p.voiceId) ?? p.voices[0];
-              p.onPickVoice(current);
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Play a sample warning"
-            accessibilityHint="Plays the selected voice"
-          >
-            <Text style={styles.sampleText}>Play a sample warning</Text>
-          </Pressable>
-        ) : null}
-      </ScrollView>
-      <View style={styles.footer}>
-        <BigButton label="Finish" hint="Opens the camera" onPress={p.onFinish} />
-      </View>
+      <StatusBar style="light" />
+      {header('How should it alert you?', 'Turn on what helps. Tap a voice to hear it.')}
+      <Animated.View style={fadeIn}>
+        <ScrollView contentContainerStyle={styles.content}>
+          <ToggleRow
+            label="Guidance voice"
+            hint="When off, the phone's own voice reads warnings instead"
+            value={p.prefs.speech}
+            onChange={(v) => p.onPrefs({ speech: v })}
+          />
+          <ToggleRow
+            label="Haptics"
+            hint="Vibrates for warnings and the guide"
+            value={p.prefs.haptics}
+            onChange={(v) => p.onPrefs({ haptics: v })}
+          />
+          <Section title="VOICE" />
+          <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
+          <Caption>You can add a trusted person's voice later, in Settings.</Caption>
+        </ScrollView>
+        <View style={styles.footer}>
+          <BigButton label="Finish" hint="Opens the camera" onPress={p.onFinish} />
+        </View>
+      </Animated.View>
     </View>
   );
 }
 
 function BigButton(p: { label: string; hint: string; onPress: () => void }) {
   return (
-    <Pressable
-      style={styles.big}
-      onPress={() => {
-        tapHaptic();
-        p.onPress();
-      }}
-      accessibilityRole="button"
-      accessibilityLabel={p.label}
-      accessibilityHint={p.hint}
-    >
+    <Tap style={styles.big} onPress={p.onPress} accessibilityRole="button" accessibilityLabel={p.label} accessibilityHint={p.hint}>
       <Text style={styles.bigText}>{p.label}</Text>
-    </Pressable>
+    </Tap>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
-  content: { padding: 20, paddingTop: 60, paddingBottom: 30 },
-  footer: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 8 },
-  icon: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+  content: { paddingHorizontal: GUTTER, paddingTop: SPACE.xl, paddingBottom: SPACE.xl },
+  footer: { paddingHorizontal: GUTTER, paddingTop: SPACE.md, paddingBottom: SAFE.bottom + SPACE.sm },
+  welcome: { paddingBottom: SPACE.xl },
+  // Blue hero at the top of the welcome screen, running up under the status bar.
+  hero: {
     backgroundColor: C.blue,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 30,
+    paddingTop: SAFE.top + SPACE.xxl,
+    paddingBottom: SPACE.xxl,
+    paddingHorizontal: GUTTER,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
   },
-  iconRing: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconDot: { width: 20, height: 20, borderRadius: 10, backgroundColor: C.blue },
-  appName: { color: C.ink, fontSize: 44, marginTop: 20, ...font('heavy') },
-  tagline: { color: C.ink, fontSize: 24, marginBottom: 24, ...font('regular') },
-  howTo: { marginBottom: 18 },
+  appName: { color: '#fff', fontSize: 48, marginTop: SPACE.xl, ...font('heavy') },
+  tagline: { color: '#fff', fontSize: 24, marginTop: SPACE.xs, ...font('regular') },
+  body: { paddingHorizontal: GUTTER, paddingTop: SPACE.xxl },
+  howTo: { flexDirection: 'row', gap: SPACE.lg, marginBottom: SPACE.xl },
+  accent: { width: 6, borderRadius: 3, backgroundColor: C.blue },
+  howToText: { flex: 1 },
   howToTitle: { color: C.ink, fontSize: 23, ...font('bold') },
-  howToBody: { color: C.ink2, fontSize: 19, marginTop: 2, ...font('regular') },
-  footnote: { color: C.ink2, fontSize: 17, lineHeight: 24, marginTop: 12, ...font('regular') },
-  headRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  back: {
-    minHeight: 56,
-    paddingHorizontal: 24,
-    borderRadius: 28,
-    borderWidth: 3,
-    borderColor: C.blue,
-    justifyContent: 'center',
-  },
-  backText: { color: C.blue, fontSize: 21, ...font('bold') },
-  stepCount: { color: C.ink2, fontSize: 18, ...font('semibold') },
-  progress: { flexDirection: 'row', gap: 8, marginTop: 16 },
-  progressBar: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#D1D1D6' },
-  progressOn: { backgroundColor: C.blue },
-  title: { color: C.ink, fontSize: 34, marginTop: 20, ...font('heavy') },
-  sub: { color: C.ink2, fontSize: 19, marginTop: 6, marginBottom: 20, lineHeight: 26, ...font('regular') },
+  howToBody: { color: C.ink2, fontSize: 19, marginTop: SPACE.xs, ...font('regular') },
+  footnote: { color: C.ink2, fontSize: 17, lineHeight: 24, marginTop: SPACE.sm, ...font('regular') },
   choice: {
     backgroundColor: C.blue,
-    borderRadius: 20,
-    minHeight: 130,
+    borderRadius: 24,
+    minHeight: 128,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 16,
+    paddingHorizontal: GUTTER,
+    marginBottom: SPACE.lg,
   },
   choiceText: { color: '#fff', fontSize: 28, textAlign: 'center', ...font('bold') },
-  sample: {
-    minHeight: 64,
-    borderRadius: 32,
-    borderWidth: 2,
-    borderColor: C.ink,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 6,
-  },
-  sampleText: { color: C.ink, fontSize: 20, ...font('bold') },
   big: { backgroundColor: C.blue, minHeight: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
   bigText: { color: '#fff', fontSize: 28, ...font('bold') },
 });
