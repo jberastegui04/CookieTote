@@ -31,8 +31,15 @@ BOX_MARGIN_M = 0.3
 # 1.0 until we calibrate against photos taken at measured distances.
 DEPTH_SCALE = {"indoor": 1.0, "outdoor": 1.0}
 
+DETECT_MODEL = "facebook/detr-resnet-50"
+# Only trust detections at least this confident.
+DETECT_THRESHOLD = 0.7
+# A detection must have at least this much of its own area inside the obstacle box to name it.
+DETECT_MIN_OVERLAP = 0.3
+
 # Load once at import so each request doesn't reload the model. Outdoor loads on first use.
 _depth_pipes = {"indoor": hf_pipeline("depth-estimation", model=DEPTH_MODELS["indoor"])}
+_detector = hf_pipeline("object-detection", model=DETECT_MODEL)
 
 
 def depth_map(image: Image.Image, mode: str) -> np.ndarray:
@@ -79,12 +86,28 @@ def _box(depth: np.ndarray, distance: float) -> list[float] | None:
     return [round(float(v), 3) for v in (x0, y0, x1 - x0, y1 - y0)]
 
 
+def label_for(image: Image.Image, box: list[float] | None) -> str | None:
+    """Name of the detected object that overlaps the obstacle box the most, or None."""
+    if box is None:
+        return None
+    w, h = image.size
+    bx0, by0, bx1, by1 = box[0], box[1], box[0] + box[2], box[1] + box[3]
+    best_label, best_area = None, 0.0
+    for det in _detector(image, threshold=DETECT_THRESHOLD):
+        b = det["box"]
+        x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
+        inter = max(0.0, min(x1, bx1) - max(x0, bx0)) * max(0.0, min(y1, by1) - max(y0, by0))
+        own = (x1 - x0) * (y1 - y0)
+        if own > 0 and inter / own >= DETECT_MIN_OVERLAP and inter > best_area:
+            best_label, best_area = det["label"], inter
+    return best_label
+
+
 def round_half(meters: float) -> float:
     return max(0.5, round(meters * 2) / 2)
 
 
 def describe(image: Image.Image, mode: str) -> dict:
-    # TODO (Michael): run facebook/detr-resnet-50 on the box to get a label.
     hit = find_obstacle(depth_map(image, mode), mode)
     if hit is None:
         return {
@@ -96,7 +119,8 @@ def describe(image: Image.Image, mode: str) -> dict:
             "height": None,
             "box": None,
         }
-    label, distance_m = None, round_half(hit["distance"])
+    # Detection only runs when there's something to name, so a clear path stays fast.
+    label, distance_m = label_for(image, hit["box"]), round_half(hit["distance"])
     return {
         "clear": False,
         "sentence": to_sentence(label, distance_m, hit["direction"], hit["height"]),

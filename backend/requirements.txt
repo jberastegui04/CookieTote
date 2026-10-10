@@ -6,5 +6,6 @@ pillow
 python-dotenv
 torch
 transformers
+timm
 # Add when you wire up voice (Juan):
 # elevenlabs
