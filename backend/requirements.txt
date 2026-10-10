@@ -4,8 +4,7 @@ python-multipart
 numpy
 pillow
 python-dotenv
-# Add when you wire up the models (Michael):
-# torch
-# transformers
+torch
+transformers
 # Add when you wire up voice (Juan):
 # elevenlabs
