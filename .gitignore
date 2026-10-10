@@ -1,0 +1,17 @@
+# secrets
+.env
+
+# node / expo
+node_modules/
+.expo/
+ios/
+android/
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# mac
+.DS_Store
