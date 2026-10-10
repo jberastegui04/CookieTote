@@ -122,7 +122,20 @@ ARRIVAL_PHRASES |= {
     "Lost it. Stop and turn slowly.",
     "Stand still while I look.",
 }
-GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES
+# Approach detour: something in the way while walking toward the target. Mirrors the DETOUR_*
+# phrases in app/App.tsx. The user keeps the phone pointed at the target and steps sideways.
+DETOUR_PHRASES = {
+    "Something close on your right. Step to your left.",
+    "Something close on your left. Step to your right.",
+    "Something close ahead. Step to your left.",
+    "Something close ahead. Step to your right.",
+    "Stop. Step to your left.",
+    "Stop. Step to your right.",
+    "Clear. Now turn right until it's in front of you.",
+    "Clear. Now turn left until it's in front of you.",
+    "Still blocked. Back up a step.",
+}
+GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES | DETOUR_PHRASES
 
 
 @app.get("/say")

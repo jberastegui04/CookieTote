@@ -180,7 +180,8 @@ const wrapDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-
 const HEADING_SMOOTHING = 0.5;
 // Find runs in two phases. SEARCH: standing still and turning; only the target is spoken, and
 // obstacles are ignored (false "Stop"s while turning on the spot were confusing). APPROACH: walking
-// toward it; "Stop" wins, then target drift, then nearby obstacles. Phrases are on the /say list.
+// toward it; something close starts a detour (see Detour below), otherwise target drift. Phrases
+// are on the /say list.
 type FindPhase = 'search' | 'approach';
 const HANDOFF_PHRASE = "Got it. Walk toward it. I'll warn you about anything in the way.";
 const LOST_PHRASE = 'Lost it. Stop and turn slowly.';
@@ -194,6 +195,22 @@ const LOST_AFTER_MS = 4000; // not seen this long, and out of view: back to Sear
 // for a second means they're walking, and the app asks them to stand still, once.
 const WALK_LEVEL = 0.5;
 const WALK_SUSTAIN_MS = 1000;
+// Approach detour: something close (or a stop) while walking toward the target. The user keeps
+// the phone pointed at the target and steps sideways, toward the open side the server reports
+// (or away from the obstacle). Target phrases and pulses are muted so nothing argues with the
+// step instruction. Once the obstacle reads clear for DETOUR_CLEAR_FRAMES answers in a row, the
+// voice says to turn back toward the target and the normal approach takes over. Phrases are on
+// the /say list (DETOUR_PHRASES in backend/main.py); change both together.
+type Detour = { side: 'left' | 'right'; startedAt: number; clearFrames: number };
+const DETOUR_CLEAR_FRAMES = 2;
+const DETOUR_STUCK_MS = 8000; // still blocked after this long: say to back up, and start over
+const DETOUR_STUCK_PHRASE = 'Still blocked. Back up a step.';
+const detourPhrase = (obstacle: Side, step: 'left' | 'right', stop: boolean) =>
+  stop
+    ? `Stop. Step to your ${step}.`
+    : `Something close ${obstacle === 'ahead' ? 'ahead' : `on your ${obstacle}`}. Step to your ${step}.`;
+const detourClearPhrase = (stepped: 'left' | 'right') =>
+  `Clear. Now turn ${stepped === 'left' ? 'right' : 'left'} until it's in front of you.`;
 // Centered and this close: you've arrived. Find stops and says to reach forward.
 const ARRIVE_DISTANCE_M = 0.7;
 const arrivalPhrase = (target: string, openVocab: boolean) =>
@@ -366,6 +383,7 @@ export default function App() {
   const movingSince = useRef<number | null>(null);
   const saidStandStill = useRef(false);
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
+  const detourRef = useRef<Detour | null>(null); // stepping around something in Approach
   const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
   // Lock-on: a short rising two-note chime (G5, D6) when the tracker locks onto the target.
@@ -946,6 +964,7 @@ export default function App() {
     walkLevel.current = 0;
     movingSince.current = null;
     saidStandStill.current = false;
+    detourRef.current = null;
     startHeading();
     frameLoop(
       () => findOnRef.current,
@@ -961,13 +980,18 @@ export default function App() {
       .then(() => fetchPhrase(HANDOFF_PHRASE))
       .then(() => fetchPhrase(arrivalPhrase(target, open)))
       .then(() => fetchPhrase(LOST_PHRASE))
-      .then(() => fetchPhrase(STAND_STILL_PHRASE));
+      .then(() => fetchPhrase(STAND_STILL_PHRASE))
+      .then(() => fetchPhrase(detourPhrase('right', 'left', false)))
+      .then(() => fetchPhrase(detourPhrase('left', 'right', false)))
+      .then(() => fetchPhrase(detourClearPhrase('left')))
+      .then(() => fetchPhrase(detourClearPhrase('right')));
   }
 
   // Search -> Approach: facing the target. Said once, with a double pulse.
   function handoff() {
     findPhaseRef.current = 'approach';
     centeredSince.current = null;
+    detourRef.current = null;
     lastDriftAt.current = Date.now();
     interruptForStop({ key: 'handoff', text: HANDOFF_PHRASE, stop: true });
     situation.current = { key: 'handoff', text: HANDOFF_PHRASE, stop: false };
@@ -985,6 +1009,7 @@ export default function App() {
     centeredSince.current = null;
     findBlanks.current = 0;
     saidStandStill.current = false;
+    detourRef.current = null;
     situation.current = { key: 'lost', text: LOST_PHRASE, stop: false };
   }
 
@@ -1111,6 +1136,10 @@ export default function App() {
       } else {
         if (now - lastFoundAt.current > LOST_AFTER_MS && (off === null || Math.abs(off) > CAMERA_HALF_FOV_DEG)) {
           lost();
+        } else if (detourRef.current) {
+          // Stepping around something: the step instruction is the only voice, and no pulses.
+          await sleep(300);
+          continue;
         } else if (off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS) {
           // Drifted off the target: say where it is now, from the gyro, without waiting for a frame.
           const text = driftSentence(off);
@@ -1309,17 +1338,49 @@ export default function App() {
       }
     }
     // Obstacles only matter in Approach: in Search you're standing still and turning, and the
-    // warnings were noise. "Stop" interrupts; "close" takes the next turn to speak.
+    // warnings were noise. Something close (or a stop) starts a detour: step sideways, keep the
+    // phone on the target, and turn back once the obstacle reads clear for a couple of answers.
     const o = data.obstacle;
-    const danger =
+    const reading =
       phase === 'approach' && !o.clear && o.distance_m !== null
         ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
         : null;
-    if (danger?.stop) {
+    const danger = reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
+    const now = Date.now();
+    const detour = detourRef.current;
+    if (danger) {
+      const obstacleSide: Side = o.direction ?? 'ahead';
+      if (!detour) {
+        const side = o.open ?? (obstacleSide === 'left' ? 'right' : 'left');
+        detourRef.current = { side, startedAt: now, clearFrames: 0 };
+        const next = { key: `detour:${side}:${danger.stop}`, text: detourPhrase(obstacleSide, side, danger.stop), stop: danger.stop };
+        if (danger.stop) interruptForStop(next);
+        situation.current = next;
+        buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      } else {
+        detour.clearFrames = 0;
+        if (now - detour.startedAt > DETOUR_STUCK_MS) {
+          // Stepping didn't help (or they didn't step): back up and try again from scratch.
+          detour.startedAt = now;
+          situation.current = { key: `detour:stuck:${now}`, text: DETOUR_STUCK_PHRASE, stop: false };
+        } else {
+          const next = { key: `detour:${detour.side}:${danger.stop}`, text: detourPhrase(obstacleSide, detour.side, danger.stop), stop: danger.stop };
+          if (danger.stop && !situation.current?.stop) interruptForStop(next);
+          situation.current = next;
+        }
+      }
       setFindInfo(data);
-      interruptForStop(danger);
-      situation.current = danger;
-      buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      return;
+    }
+    if (detour) {
+      detour.clearFrames += 1;
+      if (detour.clearFrames >= DETOUR_CLEAR_FRAMES) {
+        detourRef.current = null;
+        situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(detour.side), stop: false };
+        lastDriftAt.current = now; // let "Clear" finish before the drift sentence takes over
+      }
+      // One clear frame isn't enough to call it; keep the step instruction until then.
+      setFindInfo(data);
       return;
     }
     if (data.found && data.bearing_deg !== null) {
@@ -1332,12 +1393,10 @@ export default function App() {
       if (phase === 'approach') {
         const off = targetOffset() ?? data.bearing_deg;
         if (Math.abs(off) > FIND_AHEAD_DEG) {
-          // Drift wins over nearby obstacles; the live direction comes from the gyro.
+          // Drifted off it; the live direction comes from the gyro.
           const text = driftSentence(off) ?? data.sentence;
           lastDriftAt.current = Date.now();
           situation.current = { key: `drift:${off > 0 ? 'right' : 'left'}`, text, stop: false };
-        } else if (danger && danger.key.startsWith('close')) {
-          situation.current = danger;
         } else {
           situation.current = { key: data.sentence, text: data.sentence, stop: false };
         }
@@ -1356,12 +1415,6 @@ export default function App() {
         );
         if (data.centered) setTimeout(() => buzz(Haptics.ImpactFeedbackStyle.Heavy), 140);
       }
-      return;
-    }
-    // Not in this frame. A nearby obstacle while walking still gets said.
-    if (danger && danger.key.startsWith('close')) {
-      setFindInfo(data);
-      situation.current = danger;
       return;
     }
     // If we know where it was, guide by the gyro: clock position, and the screen's arrow and
@@ -1523,7 +1576,8 @@ export default function App() {
         : s.key.startsWith('far')
           ? GUIDE_REMIND_MS
           : GUIDE_REMIND_CLOSE_MS;
-      const oneShot = s.key === 'handoff' || s.key === 'lost' || s.key === 'standstill';
+      const oneShot =
+        s.key === 'handoff' || s.key === 'lost' || s.key === 'standstill' || s.key.startsWith('detour:clear') || s.key.startsWith('detour:stuck');
       const remind = s.key !== OPEN.key && !oneShot && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
         await sleep(100);
