@@ -98,7 +98,8 @@ export default function FindScreen(p: Props) {
   const boxHeight = useGlide(box?.height ?? null, reduce);
   const tagTop = useGlide(box ? Math.max(SAFE.top + 140, box.top - 48) : null, reduce);
   const dot = useGlide(found ? dotFrac : null, reduce);
-  const boxStyle = { left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight };
+  // Faded while the tracker is coasting (no answer has matched it for a moment), so it reads as "about here".
+  const boxStyle = { left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight, opacity: r?.stale ? 0.45 : 1 };
 
   const large = !p.cameraPicture;
 
@@ -115,7 +116,7 @@ export default function FindScreen(p: Props) {
           <>
             <Animated.View style={[styles.glow, boxStyle]} />
             <Animated.View style={[styles.box, boxStyle]} />
-            <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop }]}>
+            <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop, opacity: r?.stale ? 0.6 : 1 }]}>
               <Text style={styles.tagText}>
                 {name}
                 {r?.distance_m != null ? ` · ${formatDistance(r.distance_m, p.units)}` : ''}

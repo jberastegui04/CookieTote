@@ -29,6 +29,7 @@ import { loadFindTargets } from './find';
 import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
+import { trackUpdate, trackView, type Candidate, type Track } from './tracker';
 import Setup, { type Vision } from './Setup';
 import { DEFAULT_PREFS, formatDistance, SPEEDS, type Prefs } from './prefs';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
@@ -74,7 +75,9 @@ type FindResult = {
   centered: boolean;
   box: [number, number, number, number] | null;
   sentence: string;
+  candidates?: Candidate[]; // every candidate this frame, best first; the tracker follows one
   obstacle: SonarResult;
+  stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
 };
 
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
@@ -329,6 +332,7 @@ export default function App() {
   const headingRef = useRef<number | null>(null); // phone heading in degrees, clockwise, from the gyro
   const [headingNow, setHeadingNow] = useState<number | null>(null); // same, as state, so the screen follows the turn
   const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
+  const trackRef = useRef<Track | null>(null); // the object Find is following (tracker.ts)
   const findMisses = useRef(0);
   const findPhaseRef = useRef<FindPhase>('search');
   const lastFoundAt = useRef(0); // when the target was last in a frame
@@ -906,6 +910,7 @@ export default function App() {
     tell(`Finding ${target}. Turn slowly.`);
     quietUntil.current = Date.now() + 1800;
     targetHeadingRef.current = null;
+    trackRef.current = null;
     findMisses.current = 0;
     findBlanks.current = 0;
     findPhaseRef.current = 'search';
@@ -949,6 +954,7 @@ export default function App() {
   function lost() {
     findPhaseRef.current = 'search';
     targetHeadingRef.current = null;
+    trackRef.current = null;
     lastFoundAt.current = 0;
     lastSentence.current = null;
     centeredSince.current = null;
@@ -1049,6 +1055,7 @@ export default function App() {
     headingRef.current = null;
     setHeadingNow(null);
     targetHeadingRef.current = null;
+    trackRef.current = null;
   }
 
   // How far to turn to face the remembered target, in degrees (right is positive), or null.
@@ -1253,11 +1260,21 @@ export default function App() {
     const target = findTargetRef.current ?? data.target;
     const phase = findPhaseRef.current;
     findBlanks.current = data.found ? 0 : findBlanks.current + 1;
+    // The tracker follows one object across answers (tracker.ts); older servers send no candidates.
+    const candidates =
+      data.candidates ??
+      (data.found && data.box && data.bearing_deg !== null
+        ? [{ box: data.box, score: data.match_score ?? 1, bearing_deg: data.bearing_deg, distance_m: data.distance_m }]
+        : []);
+    trackRef.current = trackUpdate(trackRef.current, candidates, headingAtCapture, Date.now());
     if (data.found && data.bearing_deg !== null) {
       lastFoundAt.current = Date.now();
       lastSentence.current = data.sentence;
-      // Remember which way the phone pointed, even if an obstacle takes the sentence below.
-      if (headingAtCapture !== null) targetHeadingRef.current = wrapDeg(headingAtCapture + data.bearing_deg);
+      // Remember which way the phone pointed, even if an obstacle takes the sentence below. With a
+      // gyro, that's the tracked object, so haptics and drift point where the box is drawn.
+      if (headingAtCapture !== null) {
+        targetHeadingRef.current = trackRef.current?.world ?? wrapDeg(headingAtCapture + data.bearing_deg);
+      }
     }
     // Obstacles only matter in Approach: in Search you're standing still and turning, and the
     // warnings were noise. "Stop" interrupts; "close" takes the next turn to speak.
@@ -1519,7 +1536,21 @@ export default function App() {
   // stays on the object and the arrow points the right way while the user turns.
   let liveFind = findInfo;
   const targetHeading = targetHeadingRef.current;
-  if (findOn && findInfo && findInfo.bearing_deg !== null && targetHeading !== null && headingNow !== null) {
+  // The tracked object, moved by the live gyro: the box follows it instead of each raw answer.
+  const tracked = findOn && findInfo ? trackView(trackRef.current, headingNow, Date.now()) : null;
+  if (tracked && findInfo) {
+    const off = tracked.bearing_deg;
+    liveFind = {
+      ...findInfo,
+      found: true,
+      bearing_deg: Math.max(-CAMERA_HALF_FOV_DEG, Math.min(CAMERA_HALF_FOV_DEG, off)),
+      direction: Math.abs(off) <= FIND_AHEAD_DEG ? 'ahead' : off > 0 ? 'right' : 'left',
+      centered: Math.abs(off) <= 5,
+      box: tracked.box,
+      distance_m: trackRef.current?.distance ?? findInfo.distance_m,
+      stale: tracked.stale,
+    };
+  } else if (findOn && findInfo && findInfo.bearing_deg !== null && targetHeading !== null && headingNow !== null) {
     const off = wrapDeg(targetHeading - headingNow);
     const shift = (off - findInfo.bearing_deg) / (2 * CAMERA_HALF_FOV_DEG); // fraction of the frame width
     const inView = Math.abs(off) <= CAMERA_HALF_FOV_DEG;

@@ -445,55 +445,80 @@ def find(
               "match": None, "match_score": None,
               "direction": None, "bearing_deg": None, "distance_m": None, "centered": False, "box": None}
     w, h = image.size
+    # (detection, score) pairs, best first. The app's tracker gets all of them as `candidates`, so it
+    # can keep following the object it locked onto instead of jumping to whichever won this frame.
+    ranked: list[tuple[dict, float]] = []
     if open_vocab:
         found = _open_detector()(image, candidate_labels=[description or target], threshold=OPEN_POSSIBLE)
-        best = max(found, key=lambda d: d["score"], default=None)
+        ranked = [(d, d["score"]) for d in sorted(found, key=lambda d: -d["score"])]
+        best = ranked[0][0] if ranked else None
         result["match_score"] = round(best["score"], 3) if best else None
         result["match"] = "no" if best is None else "yes" if best["score"] >= OPEN_YES else "possible"
         if best and result["match"] == "yes":
             b = best["box"]
             if (b["xmax"] - b["xmin"]) * (b["ymax"] - b["ymin"]) / (w * h) < OPEN_MIN_SURE_AREA:
                 result["match"] = "possible"
-        hits = [best] if best else []
         description = None  # already used as the search words
     else:
         detections = _detector(image, threshold=DETECT_THRESHOLD)
         hits = [d for d in detections if d["label"] == FIND_TARGETS[target]]
         # The biggest one is usually the nearest.
         hits.sort(key=lambda d: -(d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))
-    depth = depth_job.result()
-    if hits and description:
         hits = hits[:MATCH_MAX_CANDIDATES]
-        scores = _match_scores([image.crop((d["box"]["xmin"], d["box"]["ymin"], d["box"]["xmax"], d["box"]["ymax"])) for d in hits], description)
-        best = max(range(len(hits)), key=lambda i: scores[i])
-        score = scores[best]
-        result["match_score"] = round(score, 3)
-        result["match"] = "yes" if score >= MATCH_YES else "possible" if score >= MATCH_POSSIBLE else "no"
-        hits = [hits[best]] if result["match"] != "no" else []
-    elif description:
-        result["match"] = "no"
-    if hits:
-        b = hits[0]["box"]
-        x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
-        bearing = ((x0 + x1) / 2 - 0.5) * 2 * CAMERA_HALF_FOV_DEG  # right is positive
-        # Distance from the middle of the box, so floor and background at its edges don't count.
-        cx, cy, hw, hh = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 4, (y1 - y0) / 4
-        core = depth[_rows(depth, (cy - hh, cy + hh)), _cols(depth, (cx - hw, cx + hw))]
-        distance = float(np.percentile(core, 25)) if core.size else None
+        if hits and description:
+            scores = _match_scores([image.crop((d["box"]["xmin"], d["box"]["ymin"], d["box"]["xmax"], d["box"]["ymax"])) for d in hits], description)
+            ranked = sorted(zip(hits, scores), key=lambda p: -p[1])
+            score = ranked[0][1]
+            result["match_score"] = round(score, 3)
+            result["match"] = "yes" if score >= MATCH_YES else "possible" if score >= MATCH_POSSIBLE else "no"
+            ranked = [(d, s) for d, s in ranked if s >= MATCH_POSSIBLE]
+        else:
+            ranked = [(d, d["score"]) for d in hits]
+            if description:
+                result["match"] = "no"
+    depth = depth_job.result()
+    candidates = [_locate(d["box"], s, w, h, depth) for d, s in ranked[:FIND_MAX_CANDIDATES]]
+    if candidates and result["match"] != "no":
+        best = candidates[0]
         result.update(
             found=True,
-            direction="ahead" if abs(bearing) <= FIND_AHEAD_DEG else ("right" if bearing > 0 else "left"),
-            bearing_deg=round(bearing, 1),
-            distance_m=round_half(distance) if distance is not None else None,
-            centered=abs(bearing) <= FIND_CENTERED_DEG,
-            box=[round(v, 3) for v in (x0, y0, x1 - x0, y1 - y0)],
+            direction="ahead" if abs(best["bearing_deg"]) <= FIND_AHEAD_DEG else ("right" if best["bearing_deg"] > 0 else "left"),
+            bearing_deg=best["bearing_deg"],
+            distance_m=round_half(best["_distance"]) if best["_distance"] is not None else None,
+            centered=abs(best["bearing_deg"]) <= FIND_CENTERED_DEG,
+            box=best["box"],
         )
-        result["_distance"] = distance
+        result["_distance"] = best["_distance"]
+    else:
+        candidates = []
     result["sentence"] = find_sentence(
         target, result["direction"], result.pop("_distance", None), result["match"], units
     )
+    for c in candidates:
+        c.pop("_distance")
+    result["candidates"] = candidates
     result["obstacle"] = _sonar_result(depth, warn_distance(mode, warning))
     return result
+
+
+FIND_MAX_CANDIDATES = 5
+
+
+def _locate(b: dict, score: float, w: int, h: int, depth: np.ndarray) -> dict:
+    """Box (x, y, width, height fractions), bearing, and distance of one detection."""
+    x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
+    bearing = ((x0 + x1) / 2 - 0.5) * 2 * CAMERA_HALF_FOV_DEG  # right is positive
+    # Distance from the middle of the box, so floor and background at its edges don't count.
+    cx, cy, hw, hh = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 4, (y1 - y0) / 4
+    core = depth[_rows(depth, (cy - hh, cy + hh)), _cols(depth, (cx - hw, cx + hw))]
+    distance = float(np.percentile(core, 25)) if core.size else None
+    return {
+        "box": [round(v, 3) for v in (x0, y0, x1 - x0, y1 - y0)],
+        "score": round(float(score), 3),
+        "bearing_deg": round(bearing, 1),
+        "distance_m": round_half(distance) if distance is not None else None,
+        "_distance": distance,
+    }
 
 
 def to_sentence(

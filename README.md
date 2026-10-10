@@ -90,6 +90,7 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `target` | string | the object looked for (from `target`, or named in `description`) |
 | `description` | string or null | the description, if one was sent |
 | `match` | string or null | with a description: `yes` (score at least 0.1), `possible` (0.01 to 0.1), or `no`; for an open-vocabulary target: `yes` (OWLv2 score at least 0.4 and not a far-off speck), `possible` (0.2 to 0.4), or `no`; null for a plain known target |
+| `candidates` | list | every candidate this frame (up to 5), best first; each has `box`, `score`, `bearing_deg`, `distance_m`. The first is the one `box` and `sentence` describe. The app's tracker (`app/tracker.ts`) uses them to keep following the same object across answers |
 | `open_vocab` | boolean | true when the target isn't one of the 13 and OWLv2 searched for the words instead |
 | `match_score` | number or null | the best candidate's score against the description, 0 to 1 |
 | `direction` | string or null | `left`, `ahead` (within 8° of center), or `right` |

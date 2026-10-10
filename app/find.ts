@@ -17,7 +17,10 @@ export type FindResult = {
   centered: boolean; // within 5 degrees: you're facing it
   box: [number, number, number, number] | null; // x, y, width, height, each 0 to 1 of the image
   sentence: string;
+  // Every candidate this frame, best first (the first is `box`). The tracker follows one across frames.
+  candidates?: { box: [number, number, number, number]; score: number; bearing_deg: number; distance_m: number | null }[];
   obstacle: { clear: boolean; distance_m: number | null; direction: 'left' | 'ahead' | 'right' | null; open: 'left' | 'right' | null };
+  stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
 };
 
 // The edge of the frame is about this many degrees off center (CAMERA_HALF_FOV_DEG in pipeline.py).
