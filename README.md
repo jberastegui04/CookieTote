@@ -30,6 +30,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 backend/
   main.py           API server and endpoints (Juan)
   pipeline.py       depth, lane logic, detection (Michael)
+  voice.py          ElevenLabs speech with a cache (Juan)
   tone.py           makes the left, center, and right sonar tones
   requirements.txt
   .env              API keys, never committed
@@ -54,7 +55,7 @@ Full result for describe mode. Slower, called once per tap.
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `height` | string or null | `foot`, `waist`, or `head` |
 | `box` | list of 4 numbers or null | obstacle outline for the overlay, as x, y, width, height in 0 to 1 of the image |
-| `audio_b64` | string or null | ElevenLabs mp3 of the sentence, base64. Null until ElevenLabs is added, so the app falls back to expo-speech |
+| `audio_b64` | string or null | ElevenLabs mp3 of the sentence, base64. Null if the key is missing or ElevenLabs fails, so the app falls back to expo-speech |
 
 ### POST /sonar
 
@@ -75,7 +76,7 @@ Fast result for sonar mode. Depth only, no detection, no speech. Called about on
 | `describe(image, mode)` | a PIL image and `indoor` or `outdoor` | a dict with the /describe fields except `audio_b64` |
 | `sonar(image, mode)` | a PIL image and `indoor` or `outdoor` | a dict with the /sonar fields |
 
-`main.py` adds `audio_b64` by sending the sentence to ElevenLabs. Until the real pipeline works, `pipeline.py` returns fake answers so the app can be built in parallel.
+`main.py` adds `audio_b64` by sending the sentence to ElevenLabs (`voice.py`), which keeps repeated sentences in memory.
 
 ## Models
 

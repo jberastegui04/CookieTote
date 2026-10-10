@@ -3,9 +3,11 @@ import io
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 import pipeline
+from voice import speak_b64
 
 load_dotenv()
 app = FastAPI(title="Obstacle Alert API")
@@ -30,9 +32,8 @@ def health():
 @app.post("/describe")
 async def describe(image: UploadFile = File(...), mode: str = Form("indoor")):
     result = pipeline.describe(await read_image(image, mode), mode)
-    # TODO (Juan): ElevenLabs mp3 of result["sentence"] as base64 (cache by sentence text).
-    # Null for now, so the app speaks the sentence with expo-speech.
-    result["audio_b64"] = None
+    # Null if ElevenLabs is unavailable, so the app speaks the sentence with expo-speech.
+    result["audio_b64"] = await run_in_threadpool(speak_b64, result["sentence"])
     return result
 
 

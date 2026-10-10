@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { setAudioModeAsync } from 'expo-audio';
-import { File } from 'expo-file-system';
+import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
+import { File, Paths } from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 
@@ -29,6 +29,8 @@ type Status = 'idle' | 'capturing' | 'thinking' | 'error';
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
+  const player = useAudioPlayer(null);
+  const lastClip = useRef<File | null>(null);
   const [mode, setMode] = useState<Mode>('indoor');
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<DescribeResult | null>(null);
@@ -54,6 +56,25 @@ export default function App() {
         </Pressable>
       </View>
     );
+  }
+
+  // Plays the ElevenLabs clip if the backend sent one, otherwise the phone's built-in voice.
+  function say(data: DescribeResult) {
+    if (data.audio_b64) {
+      try {
+        // The player needs a file, so save the mp3 to the cache folder first.
+        const clip = new File(Paths.cache, `warning-${Date.now()}.mp3`);
+        clip.write(data.audio_b64, { encoding: 'base64' });
+        player.replace({ uri: clip.uri });
+        player.play();
+        if (lastClip.current?.exists) lastClip.current.delete();
+        lastClip.current = clip;
+        return;
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+    Speech.speak(data.sentence);
   }
 
   async function scan() {
@@ -87,8 +108,7 @@ export default function App() {
           data.distance_m < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium;
         await Haptics.impactAsync(style);
       }
-      // TODO (Juan): play data.audio_b64 (ElevenLabs mp3) when it's not null.
-      Speech.speak(data.sentence);
+      say(data);
     } catch (e) {
       console.warn(e);
       setStatus('error');

@@ -9,7 +9,7 @@ Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and l
 
 ## Layout and owners
 - `app/`: Expo SDK 57, React Native, TypeScript. Single screen in `App.tsx`. Agustin owns screens and overlay; Juan owns networking, audio, haptics. Read `app/AGENTS.md` before touching Expo APIs: they change every SDK, so check the versioned docs instead of trusting memory. Audio is `expo-audio` (not `expo-av`). Add packages with `npx expo install`, never `npm install <pkg>`.
-- `backend/main.py` (Juan): FastAPI routes, ElevenLabs. `python main.py` starts it on port 8000.
+- `backend/main.py` (Juan): FastAPI routes. `backend/voice.py` (Juan): ElevenLabs speech, cached by sentence. `python main.py` starts it on port 8000.
 - `backend/pipeline.py` (Michael): `describe(image, mode)` and `sonar(image, mode)` take a PIL image and return a dict. Currently fake answers.
 - `backend/tone.py`: stereo tone generator for the sonar tones.
 - `design/` (Agustin): Figma link and exported screens.
