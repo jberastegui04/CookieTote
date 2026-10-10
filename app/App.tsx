@@ -25,6 +25,7 @@ import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Settings from './Settings';
 import FindPicker from './FindPicker';
+import { loadFindTargets } from './find';
 import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
@@ -139,16 +140,20 @@ const FIND_MISS_LIMIT = 3;
 // far-off things (a bottle across the room) have a chance. Costs some upload time per frame.
 const FIND_BLANKS_FOR_SHARP = 2;
 const FIND_SHARP_WIDTH_PX = 1024;
-const clockPhrase = (target: string, offsetDeg: number) => {
+// Open-vocabulary targets ("green dragon toy") can't be on the /say allow-list, so those say "It".
+const clockPhrase = (target: string, offsetDeg: number, openVocab: boolean) => {
   const hour = ((Math.round(offsetDeg / 30) + 12) % 12) || 12;
-  return `${capitalize(target)} at ${hour} o'clock.`;
+  return openVocab ? `It's at ${hour} o'clock.` : `${capitalize(target)} at ${hour} o'clock.`;
 };
 const wrapDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-180, 180]
 // Each gyro reading moves the heading this fraction of the way to the new value (1 = no smoothing).
 const HEADING_SMOOTHING = 0.5;
 // Centered and this close: you've arrived. Find stops and says to reach forward.
 const ARRIVE_DISTANCE_M = 0.7;
-const arrivalPhrase = (target: string) => `You're there. The ${target} is right in front of you. Reach forward.`;
+const arrivalPhrase = (target: string, openVocab: boolean) =>
+  openVocab
+    ? "You're there. It's right in front of you."
+    : `You're there. The ${target} is right in front of you. Reach forward.`;
 
 type Situation = { key: string; text: string; stop: boolean };
 const OPEN: Situation = { key: 'open', text: 'Path looks open.', stop: false };
@@ -280,6 +285,8 @@ export default function App() {
   // "Say what to find": a 3 second recording goes to /transcribe, then Find starts with the answer.
   const [speakState, setSpeakState] = useState<'idle' | 'listening' | 'working'>('idle');
   const findDescriptionRef = useRef<string | null>(null);
+  const findOpenVocabRef = useRef(false); // target isn't one of the server's named objects
+  const knownTargets = useRef<Set<string>>(new Set());
   const [arrived, setArrived] = useState<string | null>(null); // target just reached, until the next action
   const findOnRef = useRef(false);
   const findTargetRef = useRef<string | null>(null);
@@ -368,6 +375,9 @@ export default function App() {
           setVoiceId(saved);
         }
       })
+      .catch(() => {});
+    loadFindTargets()
+      .then((t) => (knownTargets.current = new Set(t)))
       .catch(() => {});
     loadVoices()
       .then((data) => {
@@ -761,11 +771,12 @@ export default function App() {
   }
 
   // Find mode: pick a target in FindPicker, then frames go to /find until Stop finding.
-  function startFind(target: string, description: string | null = null) {
+  function startFind(target: string, description: string | null = null, openVocab?: boolean) {
     setShowTargets(false);
     if (guideOnRef.current) toggleGuide();
     findTargetRef.current = target;
     findDescriptionRef.current = description;
+    findOpenVocabRef.current = openVocab ?? (knownTargets.current.size > 0 && !knownTargets.current.has(target));
     setFindTarget(target);
     findOnRef.current = true;
     setFindOn(true);
@@ -788,7 +799,10 @@ export default function App() {
     );
     voiceLoop();
     pulseLoop();
-    fetchPhrase(`No ${target} yet. Turn slowly.`).then(() => fetchPhrase(arrivalPhrase(target)));
+    const open = findOpenVocabRef.current;
+    fetchPhrase(open ? 'No match yet. Turn slowly.' : `No ${target} yet. Turn slowly.`).then(() =>
+      fetchPhrase(arrivalPhrase(target, open)),
+    );
   }
 
   // Tap, say "find the red bench", done. Records for 3 seconds, sends it to /transcribe, and
@@ -817,7 +831,8 @@ export default function App() {
       form.append('audio', new File(recorder.uri));
       const res = await fetch(`${API_URL}/transcribe`, { method: 'POST', body: form, headers: HEADERS });
       if (!res.ok) throw new Error(`Server ${res.status}`);
-      const data: { text: string; target: string | null; description: string | null } = await res.json();
+      const data: { text: string; target: string | null; description: string | null; open_vocab?: boolean } =
+        await res.json();
       setSpeakState('idle');
       if (!data.text) {
         tell("I didn't catch that. Try again.");
@@ -827,7 +842,7 @@ export default function App() {
         tell('I can find chairs, tables, benches, couches and people. Say one of those.');
         return;
       }
-      startFind(data.target, data.description);
+      startFind(data.target, data.description, data.open_vocab ?? false);
     } catch (e) {
       console.warn(e);
       setSpeakState('idle');
@@ -905,7 +920,7 @@ export default function App() {
     notify(Haptics.NotificationFeedbackType.Success);
     arriveSound.seekTo(0).then(() => arriveSound.play()).catch(() => {});
     await sleep(450);
-    await speakPhrase(arrivalPhrase(target), true);
+    await speakPhrase(arrivalPhrase(target, findOpenVocabRef.current), true);
   }
 
   function stopFind(announce = true) {
@@ -1080,7 +1095,7 @@ export default function App() {
       } else {
         findMisses.current = 0;
       }
-      const text = clockPhrase(target, off);
+      const text = clockPhrase(target, off, findOpenVocabRef.current);
       const clamped = Math.max(-CAMERA_HALF_FOV_DEG, Math.min(CAMERA_HALF_FOV_DEG, off));
       setFindInfo({
         ...data,

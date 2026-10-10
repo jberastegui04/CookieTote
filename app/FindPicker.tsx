@@ -46,14 +46,9 @@ export default function FindPicker(p: Props) {
       AccessibilityInfo.announceForAccessibility('The list is still loading. Try again in a moment.');
       return;
     }
-    // The server needs one object it knows in the words, so check before starting.
-    const target = targetFromDescription(description, targets);
-    if (!target) {
-      const msg = `Say what it is, like bench, chair or person. Add details after, like red bench.`;
-      setProblem(msg);
-      AccessibilityInfo.announceForAccessibility(msg);
-      return;
-    }
+    // One of the objects the server knows, if the words name one; otherwise the words themselves
+    // ("door", "exit sign"), which the server searches for with an open-vocabulary detector.
+    const target = targetFromDescription(description, targets) ?? description;
     p.onPick(target, description);
   }
 
