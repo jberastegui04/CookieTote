@@ -62,6 +62,9 @@ type Side = 'left' | 'ahead' | 'right';
 type FindResult = {
   found: boolean;
   target: string;
+  description: string | null; // the user's words, if they described it
+  match: 'yes' | 'possible' | 'no' | null; // how well the best candidate fits the description
+  match_score: number | null;
   direction: Side | null;
   bearing_deg: number | null; // right is positive
   distance_m: number | null;
@@ -352,14 +355,10 @@ export default function App() {
   if (!setupDone) {
     return (
       <Setup
-        mode={mode}
-        onMode={changeMode}
         onVision={chooseVision}
         voices={voices}
         voiceId={voiceId}
         onPickVoice={pickVoice}
-        prefs={prefs}
-        onPrefs={updatePrefs}
         onFinish={finishSetup}
       />
     );
@@ -1336,14 +1335,21 @@ export default function App() {
       <Pressable
         style={StyleSheet.absoluteFill}
         onPress={scan}
+        // Press and hold anywhere repeats the last warning. Works with or without VoiceOver
+        // (with it on, that's double-tap and hold). Magic tap still does the same.
+        onLongPress={() => {
+          tapHaptic();
+          repeatLast();
+        }}
+        delayLongPress={600}
         accessibilityRole="button"
         accessibilityLabel="Describe what's ahead"
-        accessibilityHint="Double tap to scan"
+        accessibilityHint="Double tap to scan. Double tap and hold to repeat the last warning."
         accessibilityState={{ busy: status === 'capturing' || status === 'thinking' }}
       />
 
       {findOn && findTarget ? (
-        <FindScreen target={findTarget} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
+        <FindScreen target={findTarget} description={findDescriptionRef.current} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
       ) : cameraPicture ? (
         <>
           {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}

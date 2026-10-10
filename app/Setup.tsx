@@ -1,29 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Caption, Header, Section, Segment, Tap, ToggleRow, VoiceList } from './controls';
-import type { Prefs } from './prefs';
+import { Caption, Header, Tap, VoiceList } from './controls';
 import { useReduceMotion } from './motion';
 import Logo from './Logo';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
-type Mode = 'indoor' | 'outdoor';
 type Voice = { id: string; name: string };
 export type Vision = 'see' | 'large';
 
 type Props = {
-  mode: Mode;
-  onMode: (m: Mode) => void;
   onVision: (v: Vision) => void;
   voices: Voice[];
   voiceId: string | null;
   onPickVoice: (v: Voice) => void;
-  prefs: Prefs;
-  onPrefs: (p: Partial<Prefs>) => void;
   onFinish: () => void;
 };
 
-// First launch: a welcome screen, then three short steps. Each choice can be changed later in Settings.
+// First launch: a welcome screen, then two short steps (what you can see, which voice). Everything
+// else, like indoor or outdoor and haptics, is in Settings.
 export default function Setup(p: Props) {
   const [step, setStep] = useState(0);
   const reduceMotion = useReduceMotion();
@@ -31,7 +26,7 @@ export default function Setup(p: Props) {
   const enter = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    const titles = ['Welcome', 'Step 1 of 3. How much can you see?', 'Step 2 of 3. Where will you use it?', 'Step 3 of 3. How should it alert you?'];
+    const titles = ['Welcome', 'Step 1 of 2. How much can you see?', 'Step 2 of 2. Pick a voice.'];
     AccessibilityInfo.announceForAccessibility(titles[step]);
     if (reduceMotion) {
       enter.setValue(1);
@@ -64,7 +59,7 @@ export default function Setup(p: Props) {
               {[
                 ['Tap anywhere', "Hear what's ahead and how far."],
                 ['Turn on Guide', 'A voice tells you what is ahead as you walk.'],
-                ['Two-finger double tap', 'Repeats the last warning.'],
+                ['Press and hold anywhere', 'Repeats the last warning.'],
               ].map(([t, b]) => (
                 <View key={t} style={styles.howTo} accessible>
                   <View style={styles.accent} />
@@ -80,7 +75,7 @@ export default function Setup(p: Props) {
             </View>
           </ScrollView>
           <View style={styles.footer}>
-            <BigButton label="Get started" hint="Starts a three step setup" onPress={() => setStep(1)} />
+            <BigButton label="Get started" hint="Starts a two step setup" onPress={() => setStep(1)} />
           </View>
         </Animated.View>
       </View>
@@ -94,7 +89,7 @@ export default function Setup(p: Props) {
       onBack={() => setStep(step - 1)}
       backHint="Goes to the previous step"
       step={step}
-      steps={3}
+      steps={2}
     />
   );
 
@@ -130,52 +125,14 @@ export default function Setup(p: Props) {
     );
   }
 
-  if (step === 2) {
-    return (
-      <View style={styles.screen}>
-        <StatusBar style="light" />
-        {header('Where will you use it?', 'This sets how far ahead it warns you.')}
-        <Animated.View style={fadeIn}>
-          <ScrollView contentContainerStyle={styles.content}>
-            <Segment
-              value={p.mode}
-              onChange={p.onMode}
-              options={[
-                { value: 'indoor', label: 'Indoor', hint: 'Warns at about 2 meters' },
-                { value: 'outdoor', label: 'Outdoor', hint: 'Warns at about 4 meters' },
-              ]}
-            />
-            <Caption>Indoor warns at about 2 m. Outdoor warns at about 4 m.</Caption>
-          </ScrollView>
-          <View style={styles.footer}>
-            <BigButton label="Continue" hint="Goes to step 3" onPress={() => setStep(3)} />
-          </View>
-        </Animated.View>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
-      {header('How should it alert you?', 'Turn on what helps. Tap a voice to hear it.')}
+      {header('Pick a voice', 'This voice reads warnings and guides you. Tap one to hear it.')}
       <Animated.View style={fadeIn}>
         <ScrollView contentContainerStyle={styles.content}>
-          <ToggleRow
-            label="Guidance voice"
-            hint="When off, the phone's own voice reads warnings instead"
-            value={p.prefs.speech}
-            onChange={(v) => p.onPrefs({ speech: v })}
-          />
-          <ToggleRow
-            label="Haptics"
-            hint="Vibrates for warnings and the guide"
-            value={p.prefs.haptics}
-            onChange={(v) => p.onPrefs({ haptics: v })}
-          />
-          <Section title="VOICE" />
           <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
-          <Caption>You can add a trusted person's voice later, in Settings.</Caption>
+          <Caption>You can change the voice, haptics and more later in Settings.</Caption>
         </ScrollView>
         <View style={styles.footer}>
           <BigButton label="Finish" hint="Opens the camera" onPress={p.onFinish} />

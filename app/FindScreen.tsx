@@ -5,6 +5,7 @@ import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Props = {
   target: string;
+  description?: string | null; // the user's words from the picker, like "red bench"
   result: FindResult | null; // newest POST /find answer; null until the first one arrives
   cameraPicture: boolean; // false: plain white screen with bigger text (camera still runs underneath)
   onStop: () => void;
@@ -25,7 +26,9 @@ export default function FindScreen(p: Props) {
   const headline = !r
     ? 'Looking…'
     : !found
-      ? `No ${p.target} yet`
+      ? p.description
+        ? 'No match yet'
+        : `No ${p.target} yet`
       : r.centered
         ? 'Straight ahead'
         : r.direction === 'left'
@@ -33,7 +36,9 @@ export default function FindScreen(p: Props) {
           : r.direction === 'right'
             ? 'Turn right'
             : 'Almost facing it';
-  const detail = !r ? 'Hold the phone up and turn slowly.' : !found ? 'Turn slowly.' : null;
+  // With a description: how well what's in view fits it. Only while it's actually in the frame.
+  const matchNote = p.description && found && r.box ? (r.match === 'yes' ? 'Looks like a match' : r.match === 'possible' ? 'Possible match' : null) : null;
+  const detail = !r ? 'Hold the phone up and turn slowly.' : !found ? 'Turn slowly.' : matchNote;
   const arrow = found && r.direction ? ARROW[r.direction] : null;
   const distance = found && r.distance_m != null ? `${r.distance_m.toFixed(1)} m away` : null;
 
@@ -78,7 +83,7 @@ export default function FindScreen(p: Props) {
 
         <View style={styles.band}>
           <Text style={styles.bandLabel}>FINDING</Text>
-          <Text style={styles.bandTarget}>{name}</Text>
+          <Text style={styles.bandTarget}>{p.description ? capitalize(p.description) : name}</Text>
         </View>
 
         <View style={[styles.middle, large && styles.middleLarge]}>
