@@ -194,16 +194,19 @@ _transcribe_times: deque[float] = deque()
 # Words that start a Find request. When several people are heard, the one who said one of these is
 # the user; the text is cut to start at the last one, so chatter before "find" is dropped.
 ASK_WORDS = {"find", "where", "where's", "look", "looking", "search", "show", "take", "locate"}
-# An object outside the 13 described in more words than this is more likely overheard talk than a
-# request ("he said the game was great"), so nothing is searched and the user is asked again.
+# Text with no ask word that describes something outside the 13 in more words than this is more
+# likely overheard talk than a request ("he said the game was great"), so nothing is searched and
+# the user is asked again. With an ask word ("find the green dragon toy on the shelf") any length
+# is a request.
 OPEN_VOCAB_MAX_WORDS = 4
+
+
+def asks(text: str) -> bool:
+    return any(w.strip(".,!?").lower() in ASK_WORDS for w in text.split())
 
 
 def pick_request(full: str, by_speaker: list[str]) -> str:
     """The user's words out of everything heard: the speaker who asked, else whoever spoke first."""
-    def asks(text: str) -> bool:
-        return any(w.strip(".,!?").lower() in ASK_WORDS for w in text.split())
-
     text = full
     if len(by_speaker) > 1:
         asked = [s for s in by_speaker if asks(s)]
@@ -237,7 +240,7 @@ async def transcribe(audio: UploadFile = File(...)):
     text = pick_request(full, by_speaker)
     target, description = pipeline.parse_request(text)
     open_vocab = target is None
-    if open_vocab and description and len(description.split()) > OPEN_VOCAB_MAX_WORDS:
+    if open_vocab and description and not asks(text) and len(description.split()) > OPEN_VOCAB_MAX_WORDS:
         # Doesn't sound like a thing to find. The app asks again instead of searching for it.
         return {"text": text, "target": None, "description": description, "open_vocab": False}
     if open_vocab:
