@@ -54,8 +54,9 @@ async def describe(
 
 
 def guide_phrases() -> set[str]:
-    """Every sentence guide mode can say. Mirrors classify() and OPEN in app/App.tsx."""
-    phrases = {"Path looks open.", "Stop. Something right in front of you."}
+    """Every sentence guide mode can say, plus "Scanning.". Mirrors classify(), OPEN, and SCANNING in app/App.tsx."""
+    # "Scanning." is said at the start of every tap-to-describe, in the same voice as the answer.
+    phrases = {"Path looks open.", "Stop. Something right in front of you.", "Scanning."}
     phrases |= {f"Stop. Something right in front of you. More room on the {s}." for s in ("left", "right")}
     for where in ("ahead", "on your left", "on your right"):
         phrases.add(f"Something close {where}.")

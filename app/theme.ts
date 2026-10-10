@@ -12,9 +12,9 @@ export const C = {
   off: '#8E8E93', // switch track when off
 };
 
-// Atkinson Hyperlegible Next, made for low vision readers. Turn on after running
-// `npx expo install expo-font @expo-google-fonts/atkinson-hyperlegible-next` (fonts load in App.tsx).
-export const USE_ATKINSON = false;
+// Atkinson Hyperlegible Next, made for low vision readers. Loaded with useFonts in App.tsx;
+// set to false to fall back to the system font.
+export const USE_ATKINSON = true;
 
 const FAMILY = {
   regular: 'AtkinsonHyperlegibleNext_400Regular',

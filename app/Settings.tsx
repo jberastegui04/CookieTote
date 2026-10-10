@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Caption, LinkRow, Section, Segment, SpeedSlider, ToggleRow, VoiceList } from './controls';
+import { tapHaptic } from './feedback';
 import type { Prefs } from './prefs';
 import { C, font } from './theme';
 
@@ -31,18 +33,50 @@ const CLONE_LABEL: Record<CloneStep, string> = {
 };
 
 export default function Settings(p: Props) {
+  // The voice list opens as its own page, like a row in iPhone Settings.
+  const [page, setPage] = useState<'main' | 'voice'>('main');
+  const [showLimits, setShowLimits] = useState(false);
+  const voiceName = p.voices.find((v) => v.id === p.voiceId)?.name ?? 'Default';
+
+  const back = (onPress: () => void, hint: string) => (
+    <Pressable
+      style={styles.back}
+      onPress={() => {
+        tapHaptic();
+        onPress();
+      }}
+      accessibilityRole="button" accessibilityLabel="Back" accessibilityHint={hint}>
+      <Text style={styles.backText}>‹ Back</Text>
+    </Pressable>
+  );
+
+  if (page === 'voice') {
+    return (
+      <View style={styles.screen} accessibilityViewIsModal>
+        <ScrollView contentContainerStyle={styles.content}>
+          {back(() => setPage('main'), 'Returns to settings')}
+          <Text style={styles.title} accessibilityRole="header">
+            Voice
+          </Text>
+          <Caption>The voice that reads warnings and guides you while you walk. Tap one to hear it.</Caption>
+          <Section title="VOICES" />
+          <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
+          <Section title="YOUR OWN" />
+          <LinkRow
+            label={CLONE_LABEL[p.cloneStep]}
+            hint={p.cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined}
+            onPress={p.onClone}
+            active={p.cloneStep === 'recording'}
+          />
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.screen} accessibilityViewIsModal>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable
-          style={styles.back}
-          onPress={p.onClose}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          accessibilityHint="Returns to the camera"
-        >
-          <Text style={styles.backText}>‹ Back</Text>
-        </Pressable>
+        {back(p.onClose, 'Returns to the camera')}
         <Text style={styles.title} accessibilityRole="header">
           Settings
         </Text>
@@ -80,24 +114,28 @@ export default function Settings(p: Props) {
           value={p.prefs.haptics}
           onChange={(v) => p.onPrefs({ haptics: v })}
         />
+        <LinkRow
+          label="Voice"
+          value={voiceName}
+          hint="Opens the list of voices"
+          onPress={() => setPage('voice')}
+        />
         <SpeedSlider value={p.prefs.speed} onChange={(i) => p.onPrefs({ speed: i })} />
 
-        <Section title="GUIDANCE VOICE" />
-        <Caption>The voice that reads warnings and guides you while you walk. Tap one to hear it.</Caption>
-        <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
-        <LinkRow
-          label={CLONE_LABEL[p.cloneStep]}
-          hint={p.cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined}
-          onPress={p.onClone}
-          active={p.cloneStep === 'recording'}
-        />
-
         <Section title="HELP" />
-        <LinkRow label="Replay setup" hint="Goes through the first-launch setup again" onPress={p.onReplaySetup} />
-        <Text style={styles.body}>
-          Warns about things standing still in your path. It does not replace a cane, and it does not detect curbs,
-          drop-offs, moving cars, or street crossings.
-        </Text>
+        <LinkRow label="Replay setup" value="Play" hint="Goes through the first-launch setup again" onPress={p.onReplaySetup} />
+        <LinkRow
+          label="What it can't see"
+          value={showLimits ? 'Hide' : 'Read'}
+          hint="Shows what the app does not detect"
+          onPress={() => setShowLimits(!showLimits)}
+        />
+        {showLimits ? (
+          <Text style={styles.body}>
+            Warns about things standing still in your path. It does not replace a cane, and it does not detect curbs,
+            drop-offs, moving cars, or street crossings.
+          </Text>
+        ) : null}
       </ScrollView>
     </View>
   );

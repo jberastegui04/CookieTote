@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { notchHaptic, tapHaptic } from './feedback';
 import { SPEEDS } from './prefs';
 import { C, font } from './theme';
 
@@ -30,7 +31,10 @@ export function Segment<T extends string>(p: {
           <Pressable
             key={o.value}
             style={[s.segItem, on && s.segOn]}
-            onPress={() => p.onChange(o.value)}
+            onPress={() => {
+              tapHaptic();
+              p.onChange(o.value);
+            }}
             accessibilityRole="radio"
             accessibilityState={{ selected: on }}
             accessibilityLabel={o.label}
@@ -48,7 +52,10 @@ export function ToggleRow(p: { label: string; hint: string; value: boolean; onCh
   return (
     <Pressable
       style={s.row}
-      onPress={() => p.onChange(!p.value)}
+      onPress={() => {
+        tapHaptic();
+        p.onChange(!p.value);
+      }}
       accessibilityRole="switch"
       accessibilityState={{ checked: p.value }}
       accessibilityLabel={p.label}
@@ -69,7 +76,10 @@ export function LinkRow(p: { label: string; hint?: string; value?: string; onPre
   return (
     <Pressable
       style={[s.row, p.active && s.rowActive]}
-      onPress={p.onPress}
+      onPress={() => {
+        tapHaptic();
+        p.onPress();
+      }}
       accessibilityRole="button"
       accessibilityLabel={p.label}
       accessibilityHint={p.hint}
@@ -97,7 +107,10 @@ export function VoiceList(p: {
           <Pressable
             key={v.id}
             style={[s.row, on && s.rowActive]}
-            onPress={() => p.onPick(v)}
+            onPress={() => {
+              tapHaptic();
+              p.onPick(v);
+            }}
             accessibilityRole="radio"
             accessibilityState={{ selected: on }}
             accessibilityLabel={v.name}
@@ -112,11 +125,24 @@ export function VoiceList(p: {
   );
 }
 
-// Five steps. VoiceOver users swipe up or down on it; everyone else taps along the track.
+// Five notches. Drag along it or tap a spot; it snaps to the nearest notch with a tick.
+// VoiceOver users swipe up or down on it instead.
+const THUMB = 36;
+
 export function SpeedSlider(p: { value: number; onChange: (i: number) => void }) {
-  const [width, setWidth] = useState(1);
+  const [width, setWidth] = useState(THUMB * 2);
+  const trackRef = useRef<View>(null);
+  const left = useRef(0); // track's left edge on screen, measured when a drag starts
   const last = SPEEDS.length - 1;
-  const set = (i: number) => p.onChange(Math.max(0, Math.min(last, i)));
+  const span = width - THUMB; // distance the thumb's center can travel
+  const set = (i: number) => {
+    const next = Math.max(0, Math.min(last, i));
+    if (next !== p.value) {
+      notchHaptic();
+      p.onChange(next);
+    }
+  };
+  const pick = (pageX: number) => set(Math.round(((pageX - left.current - THUMB / 2) / span) * last));
   const frac = p.value / last;
   return (
     <View style={s.sliderCard}>
@@ -125,10 +151,23 @@ export function SpeedSlider(p: { value: number; onChange: (i: number) => void })
         <Text style={s.rowValue}>{SPEEDS[p.value].name}</Text>
       </View>
       <Text style={s.sliderCaption}>How fast obstacle warnings are spoken while you walk.</Text>
-      <Pressable
+      <View
+        ref={trackRef}
         style={s.sliderHit}
         onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
-        onPress={(e) => set(Math.round((e.nativeEvent.locationX / width) * last))}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        // Keep the drag even if the finger drifts up or down, instead of scrolling the page.
+        onResponderTerminationRequest={() => false}
+        onResponderGrant={(e) => {
+          const x = e.nativeEvent.pageX;
+          trackRef.current?.measureInWindow((wx) => {
+            left.current = wx;
+            pick(x);
+          });
+        }}
+        onResponderMove={(e) => pick(e.nativeEvent.pageX)}
+        accessible
         accessibilityRole="adjustable"
         accessibilityLabel="Warning speech speed"
         accessibilityValue={{ text: SPEEDS[p.value].name }}
@@ -136,10 +175,16 @@ export function SpeedSlider(p: { value: number; onChange: (i: number) => void })
         onAccessibilityAction={(e) => set(p.value + (e.nativeEvent.actionName === 'increment' ? 1 : -1))}
       >
         <View style={s.sliderTrack}>
-          <View style={[s.sliderFill, { width: `${frac * 100}%` }]} />
+          <View style={[s.sliderFill, { width: frac * span }]} />
         </View>
-        <View style={[s.sliderThumb, { left: frac * (width - 36) }]} />
-      </Pressable>
+        {SPEEDS.map((_, i) => (
+          <View
+            key={i}
+            style={[s.notch, { left: (i / last) * span + THUMB / 2 - 5 }, i <= p.value && s.notchOn]}
+          />
+        ))}
+        <View style={[s.sliderThumb, { left: frac * span }]} />
+      </View>
       <View style={s.sliderEnds} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
         <Text style={s.sliderEnd}>Slower</Text>
         <Text style={s.sliderEnd}>Faster</Text>
@@ -211,10 +256,13 @@ const s = StyleSheet.create({
   sliderHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sliderCaption: { color: C.ink2, fontSize: 17, marginTop: 4, ...font('regular') },
   sliderHit: { height: 56, justifyContent: 'center', marginTop: 4 },
-  sliderTrack: { height: 8, borderRadius: 4, backgroundColor: '#D1D1D6', overflow: 'hidden' },
+  sliderTrack: { height: 8, borderRadius: 4, backgroundColor: '#D1D1D6', overflow: 'hidden', marginHorizontal: THUMB / 2 },
+  notch: { position: 'absolute', top: 23, width: 10, height: 10, borderRadius: 5, backgroundColor: '#8E8E93' },
+  notchOn: { backgroundColor: C.blue },
   sliderFill: { height: 8, backgroundColor: C.blue },
   sliderThumb: {
     position: 'absolute',
+    top: 10,
     width: 36,
     height: 36,
     borderRadius: 18,

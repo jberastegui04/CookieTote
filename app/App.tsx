@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { LinearGradient } from 'expo-linear-gradient';
+import {
+  useFonts,
+  AtkinsonHyperlegibleNext_400Regular,
+  AtkinsonHyperlegibleNext_600SemiBold,
+  AtkinsonHyperlegibleNext_700Bold,
+  AtkinsonHyperlegibleNext_800ExtraBold,
+} from '@expo-google-fonts/atkinson-hyperlegible-next';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   RecordingPresets,
@@ -15,6 +23,7 @@ import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Settings from './Settings';
+import { setTapHaptics, tapHaptic } from './feedback';
 import Setup, { type Vision } from './Setup';
 import { DEFAULT_PREFS, SPEEDS, type Prefs } from './prefs';
 import { C, font } from './theme';
@@ -92,6 +101,9 @@ function classify(distance: number, direction: Side, open: 'left' | 'right' | nu
   return { key: `far:${direction}:${meters}`, text: `Something ${where}, about ${meters} ${unit}.`, stop: false };
 }
 
+// Said at the start of every scan, in the chosen voice. The backend's /say allows it (main.py).
+const SCANNING = 'Scanning.';
+
 // Phrases worth fetching as soon as guide mode turns on, so the first warning isn't late.
 const COMMON_PHRASES = [
   OPEN.text,
@@ -141,6 +153,12 @@ const PHOTO_ASPECT = 3 / 4;
 
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
+  const [fontsLoaded, fontError] = useFonts({
+    AtkinsonHyperlegibleNext_400Regular,
+    AtkinsonHyperlegibleNext_600SemiBold,
+    AtkinsonHyperlegibleNext_700Bold,
+    AtkinsonHyperlegibleNext_800ExtraBold,
+  });
   const cameraRef = useRef<CameraView>(null);
   const player = useAudioPlayer(null);
   const lastClip = useRef<File | null>(null);
@@ -182,6 +200,8 @@ export default function App() {
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const prefsRef = useRef<Prefs>(DEFAULT_PREFS);
+  const settingsOpen = useRef(false);
+  const guideWasOn = useRef(false);
   // The last result stays (magic tap repeats it), but its on-screen tag hides after a few seconds.
   const [resultVisible, setResultVisible] = useState(false);
 
@@ -204,6 +224,7 @@ export default function App() {
           const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs) };
           prefsRef.current = loaded;
           setPrefs(loaded);
+          setTapHaptics(loaded.haptics);
         }
         if (savedMode === 'indoor' || savedMode === 'outdoor') {
           modeRef.current = savedMode;
@@ -226,6 +247,7 @@ export default function App() {
           voiceIdRef.current = data.default;
           setVoiceId(data.default);
         }
+        fetchPhrase(SCANNING); // so the first "Scanning." is already in the chosen voice
       })
       .catch(() => {});
     // Stop the guide loops if the screen goes away.
@@ -235,7 +257,8 @@ export default function App() {
     };
   }, []);
 
-  if (setupDone === null) return <View style={[styles.screen, styles.blank]} />;
+  // If the font fails to load, carry on with the system font rather than a blank screen.
+  if (setupDone === null || (!fontsLoaded && !fontError)) return <View style={[styles.screen, styles.blank]} />;
 
   if (!setupDone) {
     return (
@@ -246,6 +269,8 @@ export default function App() {
         voices={voices}
         voiceId={voiceId}
         onPickVoice={pickVoice}
+        prefs={prefs}
+        onPrefs={updatePrefs}
         onFinish={finishSetup}
       />
     );
@@ -261,7 +286,10 @@ export default function App() {
         <Text style={styles.body}>The camera looks ahead to find obstacles in your path.</Text>
         <Pressable
           style={styles.button}
-          onPress={requestPermission}
+          onPress={() => {
+            tapHaptic();
+            requestPermission();
+          }}
           accessibilityRole="button"
           accessibilityLabel="Allow camera access"
           accessibilityHint="Shows the camera permission prompt"
@@ -270,6 +298,41 @@ export default function App() {
         </Pressable>
       </View>
     );
+  }
+
+  // "Scanning." in the chosen voice, like the warnings that follow (a /say phrase, cached per voice).
+  // With VoiceOver on, it goes through VoiceOver instead. Not awaited, so the photo isn't delayed.
+  function sayStatus(text: string) {
+    if (screenReader.current) {
+      tell(text);
+      return;
+    }
+    Speech.stop();
+    const cached = prefsRef.current.speech ? phraseFiles.current.get(`${voiceIdRef.current ?? ''}|${text}`) : undefined;
+    if (cached) {
+      playUri(cached).catch(() => {});
+    } else {
+      Speech.speak(text, { rate: SPEEDS[prefsRef.current.speed].rate });
+      if (prefsRef.current.speech) fetchPhrase(text); // ready in the chosen voice next time
+    }
+  }
+
+  // Opening Settings silences the app and pauses the guide; closing it turns the guide back on.
+  function openSettings() {
+    tapHaptic();
+    settingsOpen.current = true;
+    Speech.stop();
+    player.pause();
+    guideWasOn.current = guideOnRef.current;
+    if (guideOnRef.current) toggleGuide();
+    setShowSettings(true);
+  }
+
+  function closeSettings() {
+    settingsOpen.current = false;
+    setShowSettings(false);
+    if (guideWasOn.current && !guideOnRef.current) toggleGuide();
+    guideWasOn.current = false;
   }
 
   // Short status messages. With VoiceOver on, an interrupting announcement (so it cuts off
@@ -287,12 +350,11 @@ export default function App() {
     modeRef.current = next;
     setMode(next);
     AsyncStorage.setItem(MODE_KEY, next).catch(() => {});
-    tell(next === 'indoor' ? 'Indoor' : 'Outdoor');
   }
 
   function chooseVision(v: Vision) {
     // Only those who can see the screen get the camera picture; the others get the big number.
-    changeCameraPicture(v === 'see', false);
+    changeCameraPicture(v === 'see');
   }
 
   function finishSetup() {
@@ -301,6 +363,8 @@ export default function App() {
   }
 
   function replaySetup() {
+    settingsOpen.current = false;
+    guideWasOn.current = false; // setup replaces the camera screen, so the guide stays off
     setShowSettings(false);
     setSetupDone(false);
   }
@@ -309,6 +373,7 @@ export default function App() {
     const next = { ...prefsRef.current, ...change };
     prefsRef.current = next;
     setPrefs(next);
+    setTapHaptics(next.haptics);
     AsyncStorage.setItem(PREFS_KEY, JSON.stringify(next)).catch(() => {});
   }
 
@@ -321,10 +386,10 @@ export default function App() {
     return prefsRef.current.haptics ? Haptics.notificationAsync(type) : Promise.resolve();
   }
 
-  function changeCameraPicture(on: boolean, announce = true) {
+  // No spoken echo here or in other taps: VoiceOver already reads the new state of what was tapped.
+  function changeCameraPicture(on: boolean) {
     setCameraPicture(on);
     AsyncStorage.setItem(CAMERA_KEY, on ? 'on' : 'off').catch(() => {});
-    if (announce) tell(on ? 'Camera picture on' : 'Camera picture off');
   }
 
   async function playUri(uri: string, headers?: Record<string, string>) {
@@ -335,10 +400,10 @@ export default function App() {
     player.play();
   }
 
-  // Plays the ElevenLabs clip if the backend sent one, otherwise the phone's built-in voice.
+  // Plays the ElevenLabs clip if the backend sent one and Guidance voice is on, otherwise the phone's built-in voice.
   async function say(data: DescribeResult) {
     Speech.stop();
-    if (data.audio_b64) {
+    if (data.audio_b64 && prefsRef.current.speech) {
       try {
         // The player needs a file, so save the clip to the cache folder first. The backend sends
         // WAV (base64 starts with "UklGR", which is "RIFF"); older backends sent mp3.
@@ -372,6 +437,7 @@ export default function App() {
     voiceIdRef.current = v.id;
     setVoiceId(v.id);
     AsyncStorage.setItem(VOICE_KEY, v.id).catch(() => {});
+    fetchPhrase(SCANNING);
   }
 
   // One button, three taps: consent notice, start recording, stop and upload.
@@ -474,8 +540,6 @@ export default function App() {
   // Picks a voice from the list, plays its sample sentence, and remembers the choice.
   async function pickVoice(v: Voice) {
     chooseVoice(v);
-    AccessibilityInfo.announceForAccessibility(`Voice: ${v.name}`);
-    Haptics.selectionAsync();
     quietUntil.current = Date.now() + 1500; // keep the guide quiet while the sample plays
     try {
       await playUri(`${API_URL}/voices/${v.id}/sample.wav`, HEADERS);
@@ -495,7 +559,6 @@ export default function App() {
     setGuideSide(null);
     setGuideText('');
     buzz(Haptics.ImpactFeedbackStyle.Light);
-    tell(on ? 'Guide on. Walk slowly.' : 'Guide off');
     if (on) {
       quietUntil.current = Date.now() + 1500;
       guideLoop();
@@ -656,7 +719,7 @@ export default function App() {
     try {
       setStatus('capturing');
       quietUntil.current = Date.now() + 8000;
-      tell('Scanning');
+      sayStatus(SCANNING);
       await buzz(Haptics.ImpactFeedbackStyle.Light);
       // If the guide is mid-photo, wait for it; the camera takes one picture at a time.
       while (cameraBusy.current) await sleep(50);
@@ -690,7 +753,8 @@ export default function App() {
       }
       // Covers the moment before the clip starts; speaking() keeps the guide quiet until it ends.
       quietUntil.current = Date.now() + (data.audio_b64 ? 1500 : 3500);
-      if (prefsRef.current.speech) await say(data);
+      // Nothing is spoken if Settings opened while this scan was out.
+      if (!settingsOpen.current) await say(data);
     } catch (e) {
       console.warn(e);
       setStatus('error');
@@ -745,7 +809,10 @@ export default function App() {
     <View style={styles.topBar} pointerEvents="box-none">
       <Pressable
         style={[styles.chip, !cameraPicture && styles.chipLarge]}
-        onPress={() => changeMode(mode === 'indoor' ? 'outdoor' : 'indoor')}
+        onPress={() => {
+          tapHaptic();
+          changeMode(mode === 'indoor' ? 'outdoor' : 'indoor');
+        }}
         accessibilityRole="button"
         accessibilityLabel={mode === 'indoor' ? 'Indoor' : 'Outdoor'}
         accessibilityHint="Double tap to switch between indoor and outdoor"
@@ -754,7 +821,7 @@ export default function App() {
       </Pressable>
       <Pressable
         style={[styles.chip, !cameraPicture && styles.chipLarge]}
-        onPress={() => setShowSettings(true)}
+        onPress={openSettings}
         accessibilityRole="button"
         accessibilityLabel="Settings"
         accessibilityHint="Opens settings"
@@ -771,7 +838,7 @@ export default function App() {
       accessibilityRole="switch"
       accessibilityState={{ checked: guideOn }}
       accessibilityLabel="Guide"
-      accessibilityHint="A voice tells you about obstacles while you walk"
+      accessibilityHint="A voice tells you about obstacles while you walk. Walk slowly while it's on."
     >
       <Text style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}>
         {guideOn ? 'Guide on' : 'Guide off'}
@@ -811,9 +878,11 @@ export default function App() {
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
           >
-            <View style={styles.topShade} />
+            <LinearGradient colors={['rgba(0,0,0,0.7)', 'transparent']} style={styles.topShade} />
+            <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={styles.bottomShade} />
             {box ? (
               <>
+                <View style={[styles.glow, box]} />
                 <View style={[styles.box, box]} />
                 <View style={[styles.tag, { left: box.left, top: Math.max(110, box.top - 48) }]}>
                   <Text style={styles.tagText}>
@@ -885,7 +954,7 @@ export default function App() {
           cloneStep={cloneStep}
           onClone={cloneTap}
           onReplaySetup={replaySetup}
-          onClose={() => setShowSettings(false)}
+          onClose={closeSettings}
         />
       ) : null}
     </View>
@@ -908,7 +977,8 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: '#fff', fontSize: 26, ...font('bold') },
   cover: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
-  topShade: { position: 'absolute', top: 0, left: 0, right: 0, height: 140, backgroundColor: 'rgba(0,0,0,0.3)' },
+  topShade: { position: 'absolute', top: 0, left: 0, right: 0, height: 180 },
+  bottomShade: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 320 },
   topBar: {
     position: 'absolute',
     top: 54,
@@ -926,7 +996,19 @@ const styles = StyleSheet.create({
   },
   chipLarge: { backgroundColor: C.card, borderColor: C.border, borderWidth: 1.5 },
   chipText: { color: C.ink, fontSize: 18, ...font('semibold') },
-  box: { position: 'absolute', borderWidth: 5, borderColor: C.bright, borderRadius: 18 },
+  box: { position: 'absolute', borderWidth: 5, borderColor: C.bright, borderRadius: 18, backgroundColor: 'rgba(61,139,255,0.08)' },
+  // Soft glow around the outline, like the Figma (iOS draws it from the shadow).
+  glow: {
+    position: 'absolute',
+    borderWidth: 10,
+    borderColor: 'rgba(61,139,255,0.45)',
+    borderRadius: 22,
+    margin: -5,
+    shadowColor: C.bright,
+    shadowOpacity: 1,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 0 },
+  },
   tag: {
     position: 'absolute',
     backgroundColor: '#fff',

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Caption, Section, Segment, VoiceList } from './controls';
+import { Caption, Section, Segment, ToggleRow, VoiceList } from './controls';
+import type { Prefs } from './prefs';
+import { tapHaptic } from './feedback';
 import { C, font } from './theme';
 
 type Mode = 'indoor' | 'outdoor';
 type Voice = { id: string; name: string };
-export type Vision = 'see' | 'large' | 'none';
+export type Vision = 'see' | 'large';
 
 type Props = {
   mode: Mode;
@@ -15,6 +17,8 @@ type Props = {
   voices: Voice[];
   voiceId: string | null;
   onPickVoice: (v: Voice) => void;
+  prefs: Prefs;
+  onPrefs: (p: Partial<Prefs>) => void;
   onFinish: () => void;
 };
 
@@ -23,7 +27,7 @@ export default function Setup(p: Props) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
-    const titles = ['Welcome', 'Step 1 of 3. How much can you see?', 'Step 2 of 3. Where will you use it?', 'Step 3 of 3. Pick a guidance voice.'];
+    const titles = ['Welcome', 'Step 1 of 3. How much can you see?', 'Step 2 of 3. Where will you use it?', 'Step 3 of 3. How should it alert you?'];
     AccessibilityInfo.announceForAccessibility(titles[step]);
   }, [step]);
 
@@ -67,7 +71,10 @@ export default function Setup(p: Props) {
       <View style={styles.headRow}>
         <Pressable
           style={styles.back}
-          onPress={() => setStep(step - 1)}
+          onPress={() => {
+            tapHaptic();
+            setStep(step - 1);
+          }}
           accessibilityRole="button"
           accessibilityLabel="Back"
           accessibilityHint="Goes to the previous step"
@@ -91,8 +98,7 @@ export default function Setup(p: Props) {
   if (step === 1) {
     const choices: { v: Vision; label: string; hint: string }[] = [
       { v: 'see', label: 'I can see the screen', hint: 'Shows the camera with tags on objects' },
-      { v: 'large', label: 'I need large text', hint: 'Shows a big distance number, no camera picture' },
-      { v: 'none', label: "I can't see the screen", hint: 'Sound and vibration first' },
+      { v: 'large', label: 'I see little or nothing', hint: 'Big distance number and voice, no camera picture' },
     ];
     return (
       <View style={styles.screen}>
@@ -104,6 +110,7 @@ export default function Setup(p: Props) {
               key={c.v}
               style={styles.choice}
               onPress={() => {
+                tapHaptic();
                 p.onVision(c.v);
                 setStep(2);
               }}
@@ -146,10 +153,37 @@ export default function Setup(p: Props) {
     <View style={styles.screen}>
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.content}>
-        {header('Pick a guidance voice', 'This voice reads warnings and guides you while you walk. Tap one to hear it.')}
-        <Section title="VOICES" />
+        {header('How should it alert you?', 'Turn on what helps. Try a sample below.')}
+        <ToggleRow
+          label="Guidance voice"
+          hint="When off, the phone's own voice reads warnings instead"
+          value={p.prefs.speech}
+          onChange={(v) => p.onPrefs({ speech: v })}
+        />
+        <ToggleRow
+          label="Haptics"
+          hint="Vibrates for warnings and the guide"
+          value={p.prefs.haptics}
+          onChange={(v) => p.onPrefs({ haptics: v })}
+        />
+        <Section title="VOICE" />
         <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
         <Caption>You can add a trusted person's voice later, in Settings.</Caption>
+        {p.voices.length > 0 ? (
+          <Pressable
+            style={styles.sample}
+            onPress={() => {
+              tapHaptic();
+              const current = p.voices.find((v) => v.id === p.voiceId) ?? p.voices[0];
+              p.onPickVoice(current);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Play a sample warning"
+            accessibilityHint="Plays the selected voice"
+          >
+            <Text style={styles.sampleText}>Play a sample warning</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
       <View style={styles.footer}>
         <BigButton label="Finish" hint="Opens the camera" onPress={p.onFinish} />
@@ -162,7 +196,10 @@ function BigButton(p: { label: string; hint: string; onPress: () => void }) {
   return (
     <Pressable
       style={styles.big}
-      onPress={p.onPress}
+      onPress={() => {
+        tapHaptic();
+        p.onPress();
+      }}
       accessibilityRole="button"
       accessibilityLabel={p.label}
       accessibilityHint={p.hint}
@@ -226,6 +263,16 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   choiceText: { color: '#fff', fontSize: 28, textAlign: 'center', ...font('bold') },
+  sample: {
+    minHeight: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    borderColor: C.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+  },
+  sampleText: { color: C.ink, fontSize: 20, ...font('bold') },
   big: { backgroundColor: C.blue, minHeight: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
   bigText: { color: '#fff', fontSize: 28, ...font('bold') },
 });
