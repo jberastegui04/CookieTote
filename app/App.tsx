@@ -72,8 +72,15 @@ const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
 // Guide mode: a frame to /sonar about once a second, and a voice that speaks only when the
 // situation changes (open / far / close / stop, with a direction), plus a reminder now and then.
-const GUIDE_PERIOD_MS = 1000;
+const GUIDE_PERIOD_MS = 500;
+// Up to this many frames waiting on the server at once; answers older than the newest applied are dropped.
+const GUIDE_IN_FLIGHT = 2;
+// Reminders while the situation hasn't changed: sooner when something is close.
 const GUIDE_REMIND_MS = 5000;
+const GUIDE_REMIND_CLOSE_MS = 2500;
+// Skip the camera's processing step for guide frames (much faster delivery). If frames come out
+// sideways (the guide says "ahead" for things clearly to one side), set this to false.
+const GUIDE_SKIP_PROCESSING = true;
 // "Stop" when straight ahead and this close; "close" under CLOSE_DISTANCE_M in any direction.
 const STOP_DISTANCE_M = 0.7;
 const CLOSE_DISTANCE_M = 1.2;
@@ -137,7 +144,9 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // The models shrink every photo to about 500 px, so a full-size photo (1 to 2 MB) only makes the
 // upload slow, which is what you feel outside on weak Wi-Fi or mobile data.
 const DESCRIBE_WIDTH_PX = 768;
-const SONAR_WIDTH_PX = 384;
+// Guide frames: at 384 px the depth model read 10 to 28% farther than at the size it was
+// calibrated on (table at 1.37 m read 1.68 at 384, 1.39 at 512).
+const SONAR_WIDTH_PX = 512;
 
 async function shrink(uri: string, width: number): Promise<string> {
   const image = await ImageManipulator.manipulate(uri).resize({ width }).renderAsync();
@@ -567,9 +576,12 @@ export default function App() {
     }
   }
 
-  // True from a tap until the spoken sentence has finished, plus a short pause after it.
-  function speaking() {
-    if (player.playing) quietUntil.current = Math.max(quietUntil.current, Date.now() + 600);
+  // True from a describe tap (or a voice sample) until that clip has finished, plus a short pause.
+  // Guide phrases don't count: the guide keeps taking frames while it talks.
+  function describePlaying() {
+    if (player.playing && !speechBusy.current) {
+      quietUntil.current = Math.max(quietUntil.current, Date.now() + 600);
+    }
     return Date.now() < quietUntil.current;
   }
 
@@ -627,81 +639,121 @@ export default function App() {
     }
   }
 
-  // About once a second: small photo to /sonar, sort the reading into a situation.
+  // Guide frames: capture, shrink, send. Up to two frames wait on the server at once, and an
+  // answer is applied only if it's newer than the last one applied.
   async function guideLoop() {
+    let seq = 0;
+    let applied = 0;
+    let inFlight = 0;
     let failures = 0;
+
+    const apply = (n: number, data: SonarResult) => {
+      if (n <= applied || !guideOnRef.current) return;
+      applied = n;
+      failures = 0;
+      if (data.clear || data.distance_m === null) {
+        recentDirections.current = [];
+        clearStreak.current += 1;
+        if (clearStreak.current >= OPEN_STREAK) situation.current = OPEN;
+        setGuideDistance(null);
+        setGuideSide(null);
+        return;
+      }
+      clearStreak.current = 0;
+      // Direction is the majority of the last three readings; distance is always the newest.
+      recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
+      const side = majority(recentDirections.current);
+      const next = classify(data.distance_m, side, data.open ?? null);
+      // Only "stop" interrupts: cut whatever else is being said so it can be spoken now.
+      if (next.stop && speechBusy.current && !speakingStop.current) {
+        player.pause();
+        Speech.stop();
+      }
+      situation.current = next;
+      // A pulse on every reading, stronger when closer. Never waits on speech.
+      buzz(
+        data.distance_m < 1
+          ? Haptics.ImpactFeedbackStyle.Heavy
+          : data.distance_m < 2
+            ? Haptics.ImpactFeedbackStyle.Medium
+            : Haptics.ImpactFeedbackStyle.Light,
+      );
+      setGuideDistance(data.distance_m);
+      setGuideSide(side);
+    };
+
+    const fail = () => {
+      failures += 1;
+      // Say it once, on the third miss in a row, instead of every frame.
+      if (failures === 3) {
+        situation.current = null;
+        setGuideDistance(null);
+        setGuideSide(null);
+        notify(Haptics.NotificationFeedbackType.Error);
+        tell('Guide lost connection.');
+      }
+    };
+
     while (guideOnRef.current) {
       const started = Date.now();
-      // No photos while a describe sentence is playing: taking one can make the speech stutter.
-      if (!cameraBusy.current && !speaking()) {
+      // No frames while a describe clip is playing (taking one can make it stutter), and no more
+      // than GUIDE_IN_FLIGHT frames waiting on the server.
+      if (!cameraBusy.current && !describePlaying() && inFlight < GUIDE_IN_FLIGHT) {
         cameraBusy.current = true;
+        let uri: string | null = null;
         try {
-          const photo = await cameraRef.current?.takePictureAsync({ quality: 0.1, shutterSound: false });
+          const photo = await cameraRef.current?.takePictureAsync({
+            quality: 0.3,
+            shutterSound: false,
+            skipProcessing: GUIDE_SKIP_PROCESSING,
+          });
           if (!photo) throw new Error('No photo');
-          const form = new FormData();
-          form.append('image', new File(await shrink(photo.uri, SONAR_WIDTH_PX)));
-          form.append('mode', modeRef.current);
-          const res = await fetch(`${API_URL}/sonar`, { method: 'POST', body: form, headers: HEADERS });
-          if (!res.ok) throw new Error(`Server ${res.status}`);
-          const data: SonarResult = await res.json();
-          failures = 0;
-          if (data.clear || data.distance_m === null) {
-            recentDirections.current = [];
-            clearStreak.current += 1;
-            if (clearStreak.current >= OPEN_STREAK) situation.current = OPEN;
-            if (guideOnRef.current) {
-              setGuideDistance(null);
-              setGuideSide(null);
-            }
-          } else {
-            clearStreak.current = 0;
-            // Direction is the majority of the last three readings; distance is always the newest.
-            recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
-            const side = majority(recentDirections.current);
-            const next = classify(data.distance_m, side, data.open ?? null);
-            // Only "stop" interrupts: cut whatever else is being said so it can be spoken now.
-            if (next.stop && speechBusy.current && !speakingStop.current) {
-              player.pause();
-              Speech.stop();
-            }
-            situation.current = next;
-            if (guideOnRef.current) {
-              setGuideDistance(data.distance_m);
-              setGuideSide(side);
-            }
-          }
+          uri = await shrink(photo.uri, SONAR_WIDTH_PX);
         } catch (e) {
           console.warn(e);
-          failures += 1;
-          // Say it once, on the third miss in a row, instead of every second.
-          if (failures === 3) {
-            situation.current = null;
-            setGuideDistance(null);
-            setGuideSide(null);
-            notify(Haptics.NotificationFeedbackType.Error);
-            tell('Guide lost connection.');
-          }
+          fail();
         } finally {
           cameraBusy.current = false;
         }
+        if (uri) {
+          const n = ++seq;
+          const form = new FormData();
+          form.append('image', new File(uri));
+          form.append('mode', modeRef.current);
+          inFlight += 1;
+          // Not awaited: the next capture starts while this one is on its way.
+          fetch(`${API_URL}/sonar`, { method: 'POST', body: form, headers: HEADERS })
+            .then(async (res) => {
+              if (!res.ok) throw new Error(`Server ${res.status}`);
+              apply(n, (await res.json()) as SonarResult);
+            })
+            .catch((e) => {
+              console.warn(e);
+              fail();
+            })
+            .finally(() => {
+              inFlight -= 1;
+            });
+        }
       }
-      await sleep(Math.max(0, GUIDE_PERIOD_MS - (Date.now() - started)));
+      await sleep(Math.max(50, GUIDE_PERIOD_MS - (Date.now() - started)));
     }
   }
 
-  // Speaks when the situation changes, reminds every few seconds while something is there,
+  // Speaks when the situation changes, reminds while something is there (sooner when it's close),
   // and never talks over a describe sentence or over itself.
   async function guideVoiceLoop() {
     let lastKey: string | null = null;
     let lastSpokenAt = 0;
     while (guideOnRef.current) {
       const s = situation.current;
-      if (!s || speaking() || speechBusy.current) {
+      if (!s || describePlaying() || speechBusy.current) {
         await sleep(100);
         continue;
       }
       const changed = s.key !== lastKey;
-      const remind = s.key !== OPEN.key && Date.now() - lastSpokenAt > GUIDE_REMIND_MS;
+      const remindAfter = s.key.startsWith('far') ? GUIDE_REMIND_MS : GUIDE_REMIND_CLOSE_MS;
+      const remind = s.key !== OPEN.key && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
         await sleep(100);
         continue;
@@ -709,7 +761,6 @@ export default function App() {
       lastKey = s.key;
       lastSpokenAt = Date.now();
       setGuideText(s.text);
-      if (s.stop) buzz(Haptics.ImpactFeedbackStyle.Heavy);
       await speakPhrase(s.text, s.stop);
     }
   }
@@ -751,7 +802,7 @@ export default function App() {
           data.distance_m < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium;
         await buzz(style);
       }
-      // Covers the moment before the clip starts; speaking() keeps the guide quiet until it ends.
+      // Covers the moment before the clip starts; describePlaying() keeps the guide quiet until it ends.
       quietUntil.current = Date.now() + (data.audio_b64 ? 1500 : 3500);
       // Nothing is spoken if Settings opened while this scan was out.
       if (!settingsOpen.current) await say(data);
