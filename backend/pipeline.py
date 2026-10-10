@@ -276,6 +276,38 @@ _match = {}
 _match_lock = threading.Lock()
 
 
+# Anything else people ask for ("door", "exit sign", "trash can") goes to OWLv2, which searches for
+# whatever words it's given. Slower than DETR (about 20 s a frame on a laptop CPU, a fraction of a
+# second on the T4) and less sure of itself, so it says "Possible match" more often. Thresholds fit
+# on venue photos with tune-style tests (see the commit).
+OPEN_VOCAB_MODEL = "google/owlv2-base-patch16-ensemble"
+OPEN_YES = 0.4  # things present scored 0.39-0.60, absent 0.01-0.13
+OPEN_POSSIBLE = 0.2
+# A box smaller than this share of the frame is a far-off speck: never more than "Possible match".
+# The one confident wrong answer in testing ("fire extinguisher", 0.445) was a 0.04% red dot on a far wall;
+# real objects were 6-38%, and a far exit sign 0.15% (already "possible" on its score).
+OPEN_MIN_SURE_AREA = 0.005
+OPEN_QUERY_CHARS = set("abcdefghijklmnopqrstuvwxyz '-")
+_open = {}
+_open_lock = threading.Lock()
+
+
+def _open_detector():
+    """Loaded on first use, so the server starts as fast as before."""
+    with _open_lock:
+        if "pipe" not in _open:
+            _open["pipe"] = hf_pipeline("zero-shot-object-detection", model=OPEN_VOCAB_MODEL, device=DEVICE)
+    return _open["pipe"]
+
+
+def open_query(text: str | None) -> str | None:
+    """Cleaned words for an open-vocabulary search, or None if there's nothing usable."""
+    text = " ".join((text or "").lower().split())[:DESCRIPTION_MAX_CHARS]
+    if not text or not set(text) <= OPEN_QUERY_CHARS or not any(c.isalpha() for c in text):
+        return None
+    return text
+
+
 def _match_model():
     """Loaded on first use, so the server starts as fast as before."""
     with _match_lock:
@@ -405,17 +437,31 @@ def find(
     warning: str = "normal", units: str = "meters",
 ) -> dict:
     """Where the target is (bearing and distance), plus the usual obstacle reading from the same depth map.
-    With a description, the candidate that best matches it wins, and only if it matches well enough."""
+    With a description, the candidate that best matches it wins, and only if it matches well enough.
+    A target that isn't in FIND_TARGETS ("door", "exit sign") goes to the open-vocabulary detector."""
+    open_vocab = target not in FIND_TARGETS
     depth_job = _parallel.submit(depth_map, image, mode)
-    detections = _detector(image, threshold=DETECT_THRESHOLD)
-    depth = depth_job.result()
-    w, h = image.size
-    wanted = FIND_TARGETS[target]
-    hits = [d for d in detections if d["label"] == wanted]
-    # The biggest one is usually the nearest.
-    hits.sort(key=lambda d: -(d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))
-    result = {"found": False, "target": target, "description": description, "match": None, "match_score": None,
+    result = {"found": False, "target": target, "description": description, "open_vocab": open_vocab,
+              "match": None, "match_score": None,
               "direction": None, "bearing_deg": None, "distance_m": None, "centered": False, "box": None}
+    w, h = image.size
+    if open_vocab:
+        found = _open_detector()(image, candidate_labels=[description or target], threshold=OPEN_POSSIBLE)
+        best = max(found, key=lambda d: d["score"], default=None)
+        result["match_score"] = round(best["score"], 3) if best else None
+        result["match"] = "no" if best is None else "yes" if best["score"] >= OPEN_YES else "possible"
+        if best and result["match"] == "yes":
+            b = best["box"]
+            if (b["xmax"] - b["xmin"]) * (b["ymax"] - b["ymin"]) / (w * h) < OPEN_MIN_SURE_AREA:
+                result["match"] = "possible"
+        hits = [best] if best else []
+        description = None  # already used as the search words
+    else:
+        detections = _detector(image, threshold=DETECT_THRESHOLD)
+        hits = [d for d in detections if d["label"] == FIND_TARGETS[target]]
+        # The biggest one is usually the nearest.
+        hits.sort(key=lambda d: -(d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))
+    depth = depth_job.result()
     if hits and description:
         hits = hits[:MATCH_MAX_CANDIDATES]
         scores = _match_scores([image.crop((d["box"]["xmin"], d["box"]["ymin"], d["box"]["xmax"], d["box"]["ymax"])) for d in hits], description)

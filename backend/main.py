@@ -90,6 +90,9 @@ def guide_phrases() -> set[str]:
 ARRIVAL_PHRASES = {f"You're there. The {t} is right in front of you. Reach forward." for t in pipeline.FIND_TARGETS}
 # Clock directions from the remembered heading. Mirrors clockPhrase() in app/App.tsx.
 CLOCK_PHRASES = {f"{t.capitalize()} at {h} o'clock." for t in pipeline.FIND_TARGETS for h in range(1, 13)}
+# Open-vocabulary targets ("door") can't be listed, so for those the app says "It" instead of the name.
+CLOCK_PHRASES |= {f"It's at {h} o'clock." for h in range(1, 13)}
+ARRIVAL_PHRASES |= {"You're there. It's right in front of you."}
 GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES
 
 
@@ -121,9 +124,15 @@ async def find(
 ):
     """target from the picker, and/or a description like "red bench" (which can name the target itself)."""
     description = (description or "").strip()[: pipeline.DESCRIPTION_MAX_CHARS] or None
-    target = pipeline.target_from((target or "").strip().lower() or None, description)
-    if target is None:
-        raise HTTPException(400, f"name one of: {', '.join(pipeline.FIND_TARGETS)}")
+    asked = (target or "").strip().lower() or None
+    known = pipeline.target_from(asked if asked in pipeline.FIND_TARGETS else None, description)
+    if known is None:
+        # Not one of the 13 DETR knows: search for the words themselves ("door", "exit sign").
+        known = pipeline.open_query(description or asked)
+        if known is None:
+            raise HTTPException(400, "say what to find in plain words, like 'door' or 'red bench'")
+        description = None
+    target = known
     img, mode = await read_frame(image, mode, warning, units)
     result = await run_in_threadpool(pipeline.find, img, mode, target, description, warning, units)
     result["scene"] = mode
@@ -159,7 +168,11 @@ async def transcribe(audio: UploadFile = File(...)):
     except requests.RequestException as e:
         raise HTTPException(502, f"ElevenLabs unreachable: {e}")
     target, description = pipeline.parse_request(text)
-    return {"text": text, "target": target, "description": description}
+    open_vocab = target is None
+    if open_vocab:
+        # Not one of the 13: /find searches for the words themselves ("door", "exit sign").
+        target = pipeline.open_query(description)
+    return {"text": text, "target": target, "description": description, "open_vocab": open_vocab and target is not None}
 
 
 @app.get("/voices")

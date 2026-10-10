@@ -20,7 +20,8 @@ pipeline('depth-estimation', model='depth-anything/Depth-Anything-V2-Metric-Indo
 pipeline('depth-estimation', model='depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf'); \
 pipeline('object-detection', model='facebook/detr-resnet-50'); \
 from transformers import AutoModel, AutoProcessor; \
-AutoProcessor.from_pretrained('google/siglip-base-patch16-224'); AutoModel.from_pretrained('google/siglip-base-patch16-224')"
+AutoProcessor.from_pretrained('google/siglip-base-patch16-224'); AutoModel.from_pretrained('google/siglip-base-patch16-224'); \
+pipeline('zero-shot-object-detection', model='google/owlv2-base-patch16-ensemble')"
 
 COPY --chown=user . .
 CMD ["python", "main.py"]

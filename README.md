@@ -89,7 +89,8 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `found` | boolean | true if the target is in the frame |
 | `target` | string | the object looked for (from `target`, or named in `description`) |
 | `description` | string or null | the description, if one was sent |
-| `match` | string or null | with a description: `yes` (score at least 0.1), `possible` (0.01 to 0.1), or `no`; null without one |
+| `match` | string or null | with a description: `yes` (score at least 0.1), `possible` (0.01 to 0.1), or `no`; for an open-vocabulary target: `yes` (OWLv2 score at least 0.4 and not a far-off speck), `possible` (0.2 to 0.4), or `no`; null for a plain known target |
+| `open_vocab` | boolean | true when the target isn't one of the 13 and OWLv2 searched for the words instead |
 | `match_score` | number or null | the best candidate's score against the description, 0 to 1 |
 | `direction` | string or null | `left`, `ahead` (within 8° of center), or `right` |
 | `bearing_deg` | number or null | degrees off center, right is positive, about -26 to 26; drives the centering haptic |
@@ -105,7 +106,7 @@ Spoken Find request to text (ElevenLabs speech-to-text, `scribe_v2`). Form uploa
 
 ### GET /find/targets
 
-`{"targets": ["chair", "bench", …]}`, the list the picker shows. Only objects the current detector reliably finds; doors and trash cans need an open-vocabulary model (Stage 2).
+`{"targets": ["chair", "bench", …]}`, the list the picker shows: the 13 objects DETR finds fast and reliably. Anything else ("door", "exit sign", "trash can") also works: `/find` sends the words to OWLv2 (open-vocabulary, on the GPU) and answers with "Found it", "Possible match" or "No match yet", never the user's own words. `/transcribe` returns those words as `target` with `open_vocab: true`.
 
 ### GET /say?text=…&voice_id=…
 
