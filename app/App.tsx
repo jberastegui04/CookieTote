@@ -241,6 +241,9 @@ export default function App() {
   const [findTarget, setFindTarget] = useState<string | null>(null);
   const [showTargets, setShowTargets] = useState(false);
   const [findInfo, setFindInfo] = useState<FindResult | null>(null);
+  // "Say what to find": a 3 second recording goes to /transcribe, then Find starts with the answer.
+  const [speakState, setSpeakState] = useState<'idle' | 'listening' | 'working'>('idle');
+  const findDescriptionRef = useRef<string | null>(null);
   const [arrived, setArrived] = useState<string | null>(null); // target just reached, until the next action
   const findOnRef = useRef(false);
   const findTargetRef = useRef<string | null>(null);
@@ -690,10 +693,11 @@ export default function App() {
   }
 
   // Find mode: pick a target in FindPicker, then frames go to /find until Stop finding.
-  function startFind(target: string) {
+  function startFind(target: string, description: string | null = null) {
     setShowTargets(false);
     if (guideOnRef.current) toggleGuide();
     findTargetRef.current = target;
+    findDescriptionRef.current = description;
     setFindTarget(target);
     findOnRef.current = true;
     setFindOn(true);
@@ -706,10 +710,62 @@ export default function App() {
     targetHeadingRef.current = null;
     findMisses.current = 0;
     startHeading();
-    frameLoop(() => findOnRef.current, '/find', () => ({ target }), applyFind);
+    frameLoop(
+      () => findOnRef.current,
+      '/find',
+      (): Record<string, string> =>
+        findDescriptionRef.current ? { target, description: findDescriptionRef.current } : { target },
+      applyFind,
+    );
     voiceLoop();
     pulseLoop();
     fetchPhrase(`No ${target} yet. Turn slowly.`).then(() => fetchPhrase(arrivalPhrase(target)));
+  }
+
+  // Tap, say "find the red bench", done. Records for 3 seconds, sends it to /transcribe, and
+  // starts Find with what came back. Works with VoiceOver because nothing has to be held.
+  async function speakToFind() {
+    if (speakState !== 'idle') return;
+    const { granted } = await requestRecordingPermissionsAsync();
+    if (!granted) {
+      tell('Microphone access is needed to say what to find.');
+      return;
+    }
+    setSpeakState('listening');
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      await buzz(Haptics.ImpactFeedbackStyle.Medium);
+      AccessibilityInfo.announceForAccessibility('Listening');
+      await sleep(3000);
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      await buzz(Haptics.ImpactFeedbackStyle.Light);
+      if (!recorder.uri) throw new Error('No recording');
+      setSpeakState('working');
+      const form = new FormData();
+      form.append('audio', new File(recorder.uri));
+      const res = await fetch(`${API_URL}/transcribe`, { method: 'POST', body: form, headers: HEADERS });
+      if (!res.ok) throw new Error(`Server ${res.status}`);
+      const data: { text: string; target: string | null; description: string | null } = await res.json();
+      setSpeakState('idle');
+      if (!data.text) {
+        tell("I didn't catch that. Try again.");
+        return;
+      }
+      if (!data.target) {
+        tell('I can find chairs, tables, benches, couches and people. Say one of those.');
+        return;
+      }
+      startFind(data.target, data.description);
+    } catch (e) {
+      console.warn(e);
+      setSpeakState('idle');
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+      notify(Haptics.NotificationFeedbackType.Error);
+      tell('Could not understand. Try again, or pick from the list.');
+    }
   }
 
   // Gyro heading while Find is on. Degrees, clockwise, relative (no compass needed).
@@ -1354,7 +1410,14 @@ export default function App() {
         />
       ) : null}
 
-      {showTargets ? <FindPicker onPick={startFind} onClose={() => setShowTargets(false)} /> : null}
+      {showTargets ? (
+        <FindPicker
+          onPick={startFind}
+          onSpeak={speakToFind}
+          speakState={speakState}
+          onClose={() => setShowTargets(false)}
+        />
+      ) : null}
     </View>
   );
 }

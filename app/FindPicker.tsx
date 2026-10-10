@@ -6,7 +6,15 @@ import { C, GUTTER, SAFE, SPACE } from './theme';
 
 type Props = {
   onPick: (target: string) => void;
+  onSpeak: () => void;
+  speakState: 'idle' | 'listening' | 'working';
   onClose: () => void;
+};
+
+const SPEAK_LABEL = {
+  idle: 'Say what to find',
+  listening: 'Listening… say it now',
+  working: 'Working it out…',
 };
 
 // Full-screen list of things Find can look for, from GET /find/targets. Tapping one starts Find.
@@ -35,7 +43,15 @@ export default function FindPicker(p: Props) {
         backHint="Returns to the camera"
       />
       <ScrollView contentContainerStyle={styles.content}>
-        <Section title="LOOK FOR" />
+        <Section title="SAY IT" />
+        <LinkRow
+          label={SPEAK_LABEL[p.speakState]}
+          hint='Records for three seconds. Say something like "find the chair".'
+          onPress={p.onSpeak}
+          active={p.speakState !== 'idle'}
+        />
+        <Caption>For example "find the red bench" or "where is the table".</Caption>
+        <Section title="OR PICK" />
         {targets ? (
           targets.map((t) => (
             <LinkRow
