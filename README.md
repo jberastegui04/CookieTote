@@ -70,9 +70,29 @@ Fast result for guide mode (the endpoint keeps its old name). Depth only, no det
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `open` | string or null | `left` or `right` if that side has nothing within the warning distance, else null |
 
+### POST /find
+
+Find mode: where a chosen object is, plus the usual obstacle reading from the same frame. Form upload: `image` (about 512 px wide, like guide frames), `mode`, and `target` (one of `GET /find/targets`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `found` | boolean | true if the target is in the frame |
+| `target` | string | the target asked for |
+| `direction` | string or null | `left`, `ahead` (within 8° of center), or `right` |
+| `bearing_deg` | number or null | degrees off center, right is positive, about -26 to 26; drives the centering haptic |
+| `distance_m` | number or null | distance to the target, rounded to 0.5 |
+| `centered` | boolean | within 5° of center: you're facing it |
+| `box` | list of 4 numbers or null | the target's outline, x, y, width, height in 0 to 1 of the image |
+| `sentence` | string | what to say, e.g. "Chair, slightly right, about 3 meters." or "No chair yet. Turn slowly." |
+| `obstacle` | object | the same fields as `/sonar`; a "Stop" from it wins over Find |
+
+### GET /find/targets
+
+`{"targets": ["chair", "bench", …]}`, the list the picker shows. Only objects the current detector reliably finds; doors and trash cans need an open-vocabulary model (Stage 2).
+
 ### GET /say?text=…&voice_id=…
 
-A WAV of a short phrase (up to 120 characters) in the chosen voice, for guide mode. 503 if ElevenLabs is unavailable, and the app then uses the phone's own voice. Cached by voice and text, so repeated phrases cost nothing.
+A WAV of a guide or find phrase in the chosen voice. Only the app's own phrases are accepted (anything else is a 400), so nobody can make a cloned voice say arbitrary things through the public Space. 503 if ElevenLabs is unavailable, and the app then uses the phone's own voice. Cached by voice and text, so repeated phrases cost nothing.
 
 ### GET /voices
 

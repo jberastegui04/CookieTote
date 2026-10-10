@@ -65,9 +65,9 @@ def guide_phrases() -> set[str]:
     return phrases
 
 
-# The Space is public, so /say only speaks guide phrases: otherwise anyone with the link could
-# make a cloned trusted voice say anything, and spend the ElevenLabs credits doing it.
-GUIDE_PHRASES = guide_phrases()
+# The Space is public, so /say only speaks guide and find phrases: otherwise anyone with the link
+# could make a cloned trusted voice say anything, and spend the ElevenLabs credits doing it.
+GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases()
 
 
 @app.get("/say")
@@ -80,6 +80,19 @@ async def say(text: str, voice_id: str | None = None):
     if wav is None:
         raise HTTPException(503, "voice unavailable")
     return Response(content=wav, media_type="audio/wav")
+
+
+@app.get("/find/targets")
+def find_targets():
+    return {"targets": list(pipeline.FIND_TARGETS)}
+
+
+@app.post("/find")
+async def find(image: UploadFile = File(...), mode: str = Form("indoor"), target: str = Form(...)):
+    target = target.strip().lower()
+    if target not in pipeline.FIND_TARGETS:
+        raise HTTPException(400, f"target must be one of: {', '.join(pipeline.FIND_TARGETS)}")
+    return await run_in_threadpool(pipeline.find, await read_image(image, mode), mode, target)
 
 
 @app.get("/voices")

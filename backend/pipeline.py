@@ -213,11 +213,88 @@ def describe(image: Image.Image, mode: str) -> dict:
 
 
 def sonar(image: Image.Image, mode: str) -> dict:
-    hit = find_obstacle(depth_map(image, mode), mode)
+    return _sonar_result(depth_map(image, mode), mode)
+
+
+def _sonar_result(depth: np.ndarray, mode: str) -> dict:
+    hit = find_obstacle(depth, mode)
     if hit is None:
         return {"clear": True, "distance_m": None, "direction": None, "open": None}
-    # Finer than half meters so the beep rate changes smoothly as you walk.
+    # Finer than half meters so the guide's thresholds change smoothly as you walk.
     return {"clear": False, "distance_m": round(hit["distance"], 1), "direction": hit["direction"], "open": hit["open"]}
+
+
+# Find mode. Spoken name -> DETR label. Only things DETR reliably detects; its label list also has
+# "door", "desk" and "window", but COCO never trained them, so those wait for an open-vocabulary model.
+FIND_TARGETS = {
+    "chair": "chair", "bench": "bench", "couch": "couch", "table": "dining table", "person": "person",
+    "toilet": "toilet", "sink": "sink", "refrigerator": "refrigerator", "microwave": "microwave",
+    "laptop": "laptop", "backpack": "backpack", "bottle": "bottle", "cup": "cup",
+}
+# A phone's main camera held upright sees about 52 degrees across, so the frame edge is about 26 degrees off center.
+CAMERA_HALF_FOV_DEG = 26
+FIND_AHEAD_DEG = 8  # within this of center, say "ahead"
+FIND_CENTERED_DEG = 5  # within this, you're facing it
+FIND_MAX_SPOKEN_M = 10
+
+
+def _find_how_far(distance: float) -> str:
+    """Half meters up close, whole meters farther out, so the phrase set stays small."""
+    if distance <= VERY_CLOSE_M:
+        return "very close"
+    if distance > FIND_MAX_SPOKEN_M:
+        return f"more than {FIND_MAX_SPOKEN_M} meters"
+    meters = round(distance * 2) / 2 if distance < 3.25 else float(round(distance))
+    return f"about {meters:g} {'meter' if meters == 1 else 'meters'}"
+
+
+def find_sentence(target: str, direction: str | None, distance: float | None) -> str:
+    if direction is None or distance is None:
+        return f"No {target} yet. Turn slowly."
+    where = {"left": "slightly left", "right": "slightly right"}.get(direction, "ahead")
+    return f"{target.capitalize()}, {where}, {_find_how_far(distance)}."
+
+
+def find_phrases() -> set[str]:
+    """Every sentence find() can return, for the /say allowlist."""
+    distances = [0.5, 1, 1.5, 2, 2.5, 3] + list(range(4, FIND_MAX_SPOKEN_M + 1)) + [FIND_MAX_SPOKEN_M + 1]
+    phrases = set()
+    for target in FIND_TARGETS:
+        phrases.add(find_sentence(target, None, None))
+        for direction in ("left", "ahead", "right"):
+            phrases |= {find_sentence(target, direction, d) for d in distances}
+    return phrases
+
+
+def find(image: Image.Image, mode: str, target: str) -> dict:
+    """Where the target is (bearing and distance), plus the usual obstacle reading from the same depth map."""
+    depth = depth_map(image, mode)
+    w, h = image.size
+    wanted = FIND_TARGETS[target]
+    hits = [d for d in _detector(image, threshold=DETECT_THRESHOLD) if d["label"] == wanted]
+    result = {"found": False, "target": target, "direction": None, "bearing_deg": None,
+              "distance_m": None, "centered": False, "box": None}
+    if hits:
+        # The biggest one is usually the nearest.
+        b = max(hits, key=lambda d: (d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))["box"]
+        x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
+        bearing = ((x0 + x1) / 2 - 0.5) * 2 * CAMERA_HALF_FOV_DEG  # right is positive
+        # Distance from the middle of the box, so floor and background at its edges don't count.
+        cx, cy, hw, hh = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 4, (y1 - y0) / 4
+        core = depth[_rows(depth, (cy - hh, cy + hh)), _cols(depth, (cx - hw, cx + hw))]
+        distance = float(np.percentile(core, 25)) if core.size else None
+        result.update(
+            found=True,
+            direction="ahead" if abs(bearing) <= FIND_AHEAD_DEG else ("right" if bearing > 0 else "left"),
+            bearing_deg=round(bearing, 1),
+            distance_m=round_half(distance) if distance is not None else None,
+            centered=abs(bearing) <= FIND_CENTERED_DEG,
+            box=[round(v, 3) for v in (x0, y0, x1 - x0, y1 - y0)],
+        )
+        result["_distance"] = distance
+    result["sentence"] = find_sentence(target, result["direction"], result.pop("_distance", None))
+    result["obstacle"] = _sonar_result(depth, mode)
+    return result
 
 
 def to_sentence(
