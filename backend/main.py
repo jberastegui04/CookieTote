@@ -53,6 +53,18 @@ async def describe(
     return result
 
 
+@app.get("/say")
+async def say(text: str, voice_id: str | None = None):
+    """WAV of a short phrase in the chosen voice, for guide mode. Cached by (voice, text)."""
+    text = text.strip()
+    if not text or len(text) > 120:
+        raise HTTPException(400, "text must be 1 to 120 characters")
+    wav = await run_in_threadpool(voice.speak_wav, text, voice_id)
+    if wav is None:
+        raise HTTPException(503, "voice unavailable")
+    return Response(content=wav, media_type="audio/wav")
+
+
 @app.get("/voices")
 async def voices():
     return {"default": voice.default_voice_id(), "voices": await run_in_threadpool(voice.list_voices)}

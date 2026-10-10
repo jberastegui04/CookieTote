@@ -8,7 +8,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Describe mode.** Tap anywhere on the screen. The app takes one photo, finds the closest obstacle in your walking path, and speaks it, for example "chair, about one meter, slightly left" or "obstacle at head height, one meter ahead."
 
-**Sonar mode.** A toggle you leave on while walking. The app checks depth about once a second and plays beeps and haptics that speed up as you get closer. A single beep in one ear means an obstacle on that side; a lower double beep in both ears means it's straight ahead, followed by a softer beep in the ear with more room. Under about 0.7 m straight ahead it says "Stop. Obstacle ahead, very close." Otherwise no speech, so you can keep moving. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
+**Guide mode.** A toggle you leave on while walking. The app checks depth about once a second and a voice of your choosing (including a cloned trusted voice) tells you what changed, in short general phrases: "Something ahead, about 2 meters", "Something close on your left", "Stop. Something right in front of you. More room on the right", "Path looks open". It speaks only when the situation changes, with a reminder every few seconds while something is there, and never talks over itself. One buzz on "stop". No beeps. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
 **Indoor and outdoor setting.** Applies to both modes. Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors).
 
@@ -24,7 +24,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 2. Depth Anything V2 (Hugging Face) estimates distance for every pixel.
 3. We check a lane down the middle of the frame, split into foot, waist, and head height, and find the closest thing within the warning distance.
 4. An object detector adds a name if it recognizes the obstacle. If not, we still warn.
-5. Describe mode builds a short sentence and ElevenLabs speaks it. Sonar mode only returns distance and direction, and the phone handles the beeps and haptics.
+5. Describe mode builds a short sentence and ElevenLabs speaks it. Guide mode gets distance, direction and open side back about once a second, and the phone turns changes into short spoken phrases in the chosen voice.
 
 ## Repo layout
 
@@ -33,7 +33,6 @@ backend/
   main.py           API server and endpoints (Juan)
   pipeline.py       depth, lane logic, detection (Michael)
   voice.py          ElevenLabs speech with a cache (Juan)
-  tone.py           makes the left, center, and right sonar tones
   requirements.txt
   .env              API keys, never committed
 app/                Expo app (Agustin for UI, Juan for networking, audio, haptics)
@@ -62,7 +61,7 @@ Full result for describe mode. Slower, called once per tap. Also takes an option
 
 ### POST /sonar
 
-Fast result for sonar mode. Depth only, no detection, no speech. Called about once a second. Send small frames (around 384 px wide).
+Fast result for guide mode (the endpoint keeps its old name). Depth only, no detection, no speech. Called about once a second. Send small frames (around 384 px wide).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -70,6 +69,10 @@ Fast result for sonar mode. Depth only, no detection, no speech. Called about on
 | `distance_m` | number or null | distance to the closest obstacle |
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `open` | string or null | `left` or `right` if that side has nothing within the warning distance, else null |
+
+### GET /say?text=…&voice_id=…
+
+A WAV of a short phrase (up to 120 characters) in the chosen voice, for guide mode. 503 if ElevenLabs is unavailable, and the app then uses the phone's own voice. Cached by voice and text, so repeated phrases cost nothing.
 
 ### GET /voices
 
@@ -149,9 +152,9 @@ Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backen
 
 ## Accessibility rules
 
-- Every touchable element has an `accessibilityLabel`, `accessibilityHint`, and `accessibilityRole`. The sonar toggle uses the switch role so VoiceOver says on or off.
+- Every touchable element has an `accessibilityLabel`, `accessibilityHint`, and `accessibilityRole`. The guide toggle uses the switch role so VoiceOver says on or off.
 - The camera overlay is visual only, so it's hidden from VoiceOver with `accessible={false}`.
-- Status changes (scanning, sonar on, no connection) are announced with `AccessibilityInfo.announceForAccessibility`.
+- Status changes (scanning, guide on, no connection) are announced with `AccessibilityInfo.announceForAccessibility`.
 - Magic tap repeats the last warning.
 - Nothing is shown only on screen. Every state is spoken or felt.
 - Keep VoiceOver labels short and start app audio a moment after the tap so the two don't overlap.

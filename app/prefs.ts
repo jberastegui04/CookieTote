@@ -1,12 +1,11 @@
 // Choices from Settings that the app remembers on the phone.
 export type Prefs = {
-  speech: boolean; // speak the guidance sentence after a scan
-  beeps: boolean; // sonar tones (haptics can stay on without them)
-  haptics: boolean; // vibration for warnings and sonar
+  speech: boolean; // ElevenLabs voice for warnings and the guide (off: the phone's own voice)
+  haptics: boolean; // vibration for warnings and the guide
   speed: number; // index into SPEEDS, for spoken warnings
 };
 
-export const DEFAULT_PREFS: Prefs = { speech: true, beeps: true, haptics: true, speed: 2 };
+export const DEFAULT_PREFS: Prefs = { speech: true, haptics: true, speed: 2 };
 
 export const SPEEDS = [
   { rate: 0.8, name: 'Slowest' },

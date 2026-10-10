@@ -61,17 +61,54 @@ const RESULT_SHOW_MS = 5000;
 // Free ngrok links answer with an HTML warning page unless this header is sent.
 const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
-// Same warning distances as backend/pipeline.py.
-const WARN_DISTANCE_M: Record<Mode, number> = { indoor: 2, outdoor: 4 };
-const SONAR_PERIOD_MS = 1000;
-// A reading older than this is too stale to keep beeping about.
-const SONAR_STALE_MS = 3000;
-// Under this, with sonar on and the obstacle straight ahead, say so out loud (at most every few seconds).
+// Guide mode: a frame to /sonar about once a second, and a voice that speaks only when the
+// situation changes (open / far / close / stop, with a direction), plus a reminder now and then.
+const GUIDE_PERIOD_MS = 1000;
+const GUIDE_REMIND_MS = 5000;
+// "Stop" when straight ahead and this close; "close" under CLOSE_DISTANCE_M in any direction.
 const STOP_DISTANCE_M = 0.7;
-const STOP_REPEAT_MS = 4000;
-// After the "ahead" double beep, a softer single beep in the ear with more room. Try it in the
-// blindfold test; set to false if it confuses people.
-const GUIDE_CUE = true;
+const CLOSE_DISTANCE_M = 1.2;
+// "Path looks open" needs this many clear readings in a row, so one noisy frame can't say it.
+const OPEN_STREAK = 2;
+
+type Situation = { key: string; text: string; stop: boolean };
+const OPEN: Situation = { key: 'open', text: 'Path looks open.', stop: false };
+
+function classify(distance: number, direction: Side, open: 'left' | 'right' | null): Situation {
+  if (direction === 'ahead' && distance <= STOP_DISTANCE_M) {
+    return {
+      key: `stop:${open ?? ''}`,
+      text: `Stop. Something right in front of you.${open ? ` More room on the ${open}.` : ''}`,
+      stop: true,
+    };
+  }
+  const where = direction === 'ahead' ? 'ahead' : `on your ${direction}`;
+  if (distance <= CLOSE_DISTANCE_M) {
+    return { key: `close:${direction}`, text: `Something close ${where}.`, stop: false };
+  }
+  const meters = Math.max(1, Math.min(4, Math.round(distance)));
+  return { key: `far:${direction}:${meters}`, text: `Something ${where}, about ${meters} meters.`, stop: false };
+}
+
+// Phrases worth fetching as soon as guide mode turns on, so the first warning isn't late.
+const COMMON_PHRASES = [
+  OPEN.text,
+  classify(0.5, 'ahead', null).text,
+  classify(0.5, 'ahead', 'left').text,
+  classify(0.5, 'ahead', 'right').text,
+  classify(1, 'ahead', null).text,
+  classify(1, 'left', null).text,
+  classify(1, 'right', null).text,
+  classify(2, 'ahead', null).text,
+  classify(2, 'left', null).text,
+  classify(2, 'right', null).text,
+];
+
+function hashKey(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(16);
+}
 
 function majority(items: Side[]): Side {
   const counts = new Map<Side, number>();
@@ -92,12 +129,6 @@ async function shrink(uri: string, width: number): Promise<string> {
   const image = await ImageManipulator.manipulate(uri).resize({ width }).renderAsync();
   const saved = await image.saveAsync({ format: SaveFormat.JPEG, compress: 0.7 });
   return saved.uri;
-}
-
-// Beeps speed up as the obstacle gets closer: slow at the warning distance, rapid at half a meter.
-function beepGapMs(distance: number, mode: Mode) {
-  const t = Math.min(1, Math.max(0, (distance - 0.5) / (WARN_DISTANCE_M[mode] - 0.5)));
-  return 150 + t * 850;
 }
 
 const DIRECTION_WORD = { left: 'slightly left', ahead: 'ahead', right: 'slightly right' } as const;
@@ -123,22 +154,24 @@ export default function App() {
   const cloneStepRef = useRef<CloneStep>('idle');
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
-  // Sonar. The loops below run for a long time, so they read refs instead of state.
-  const [sonarOn, setSonarOn] = useState(false);
-  const [sonarDistance, setSonarDistance] = useState<number | null>(null);
-  const sonarOnRef = useRef(false);
+  // Guide mode. The loops below run for a long time, so they read refs instead of state.
+  const [guideOn, setGuideOn] = useState(false);
+  const [guideDistance, setGuideDistance] = useState<number | null>(null);
+  const [guideSide, setGuideSide] = useState<Side | null>(null);
+  const [guideText, setGuideText] = useState('');
+  const guideOnRef = useRef(false);
   const modeRef = useRef<Mode>('indoor');
-  const cameraBusy = useRef(false); // one photo at a time, shared by describe and sonar
-  const quietUntil = useRef(0); // no beeps while a describe sentence is being spoken
-  const reading = useRef<{ distance: number; direction: Side; open: 'left' | 'right' | null; at: number } | null>(null);
-  const recentDirections = useRef<Side[]>([]); // last few readings, so one noisy frame can't flip the ear
-  const lastStopAt = useRef(0);
-  // Three short tones, panned left, center, and right (made by backend/tone.py).
-  const toneLeft = useAudioPlayer(require('./assets/tones/left.wav'));
-  const toneAhead = useAudioPlayer(require('./assets/tones/center.wav'));
-  const toneRight = useAudioPlayer(require('./assets/tones/right.wav'));
+  const cameraBusy = useRef(false); // one photo at a time, shared by describe and guide
+  const quietUntil = useRef(0); // guide stays quiet while a describe sentence is being spoken
+  const situation = useRef<Situation | null>(null); // newest reading, sorted; null until the first one
+  const recentDirections = useRef<Side[]>([]); // last few readings, so one noisy frame can't flip the side
+  const clearStreak = useRef(0);
+  // The guide voice: one phrase at a time, files cached per voice, and the phone's voice as fallback.
+  const speechBusy = useRef(false);
+  const speakingStop = useRef(false);
+  const phraseFiles = useRef(new Map<string, string>());
 
-  // Screens and layout. Settings opens over the camera so sonar keeps working.
+  // Screens and layout. Settings opens over the camera so the guide keeps working.
   const [showSettings, setShowSettings] = useState(false);
   // Off: no camera picture, just the big number (for people who see little of the screen).
   const [cameraPicture, setCameraPicture] = useState(true);
@@ -193,9 +226,9 @@ export default function App() {
         }
       })
       .catch(() => {});
-    // Stop the sonar loops if the screen goes away.
+    // Stop the guide loops if the screen goes away.
     return () => {
-      sonarOnRef.current = false;
+      guideOnRef.current = false;
       sub.remove();
     };
   }, []);
@@ -277,7 +310,7 @@ export default function App() {
     AsyncStorage.setItem(PREFS_KEY, JSON.stringify(next)).catch(() => {});
   }
 
-  // Vibration for warnings and sonar, unless turned off in Settings.
+  // Vibration for warnings and the guide, unless turned off in Settings.
   function buzz(style: Haptics.ImpactFeedbackStyle) {
     return prefsRef.current.haptics ? Haptics.impactAsync(style) : Promise.resolve();
   }
@@ -363,7 +396,7 @@ export default function App() {
         Speech.speak('Microphone access is needed to record a voice.');
         return;
       }
-      if (sonarOnRef.current) toggleSonar();
+      if (guideOnRef.current) toggleGuide();
       try {
         // iOS only records when the audio session allows it; turned back off after the recording.
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -441,7 +474,7 @@ export default function App() {
     chooseVoice(v);
     AccessibilityInfo.announceForAccessibility(`Voice: ${v.name}`);
     Haptics.selectionAsync();
-    quietUntil.current = Date.now() + 1500; // keep sonar quiet while the sample plays
+    quietUntil.current = Date.now() + 1500; // keep the guide quiet while the sample plays
     try {
       await playUri(`${API_URL}/voices/${v.id}/sample.wav`, HEADERS);
     } catch (e) {
@@ -449,18 +482,23 @@ export default function App() {
     }
   }
 
-  function toggleSonar() {
-    const on = !sonarOnRef.current;
-    sonarOnRef.current = on;
-    setSonarOn(on);
-    reading.current = null;
+  function toggleGuide() {
+    const on = !guideOnRef.current;
+    guideOnRef.current = on;
+    setGuideOn(on);
+    situation.current = null;
     recentDirections.current = [];
-    setSonarDistance(null);
-    AccessibilityInfo.announceForAccessibility(on ? 'Sonar on' : 'Sonar off');
+    clearStreak.current = 0;
+    setGuideDistance(null);
+    setGuideSide(null);
+    setGuideText('');
     buzz(Haptics.ImpactFeedbackStyle.Light);
+    tell(on ? 'Guide on. Walk slowly.' : 'Guide off');
     if (on) {
-      sonarLoop();
-      beepLoop();
+      quietUntil.current = Date.now() + 1500;
+      guideLoop();
+      guideVoiceLoop();
+      prefetchPhrases();
     }
   }
 
@@ -470,12 +508,66 @@ export default function App() {
     return Date.now() < quietUntil.current;
   }
 
-  // About once a second: small photo to /sonar, remember the newest reading.
-  async function sonarLoop() {
+  // Fetches the phrase in the chosen voice from GET /say, once per voice, and keeps the file.
+  async function fetchPhrase(text: string): Promise<string | null> {
+    const key = `${voiceIdRef.current ?? ''}|${text}`;
+    const cached = phraseFiles.current.get(key);
+    if (cached) return cached;
+    try {
+      const voice = voiceIdRef.current ? `&voice_id=${encodeURIComponent(voiceIdRef.current)}` : '';
+      const res = await fetch(`${API_URL}/say?text=${encodeURIComponent(text)}${voice}`, { headers: HEADERS });
+      if (!res.ok) return null;
+      const file = new File(Paths.cache, `phrase-${hashKey(key)}.wav`);
+      file.write(new Uint8Array(await res.arrayBuffer()));
+      phraseFiles.current.set(key, file.uri);
+      return file.uri;
+    } catch (e) {
+      console.warn(e);
+      return null;
+    }
+  }
+
+  async function prefetchPhrases() {
+    for (const text of COMMON_PHRASES) {
+      if (!guideOnRef.current) return;
+      await fetchPhrase(text);
+    }
+  }
+
+  // Says one phrase and waits for it to finish. ElevenLabs voice if available, else the phone's.
+  async function speakPhrase(text: string, stop: boolean) {
+    speechBusy.current = true;
+    speakingStop.current = stop;
+    try {
+      const uri = prefsRef.current.speech ? await fetchPhrase(text) : null;
+      if (uri) {
+        await playUri(uri);
+        for (let i = 0; i < 10 && !player.playing; i++) await sleep(50);
+        for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
+      } else {
+        await new Promise<void>((resolve) => {
+          Speech.speak(text, {
+            rate: SPEEDS[prefsRef.current.speed].rate,
+            onDone: resolve,
+            onStopped: resolve,
+            onError: () => resolve(),
+          });
+        });
+      }
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      speechBusy.current = false;
+      speakingStop.current = false;
+    }
+  }
+
+  // About once a second: small photo to /sonar, sort the reading into a situation.
+  async function guideLoop() {
     let failures = 0;
-    while (sonarOnRef.current) {
+    while (guideOnRef.current) {
       const started = Date.now();
-      // No sonar photos while the voice is talking: taking one can make the speech stutter.
+      // No photos while a describe sentence is playing: taking one can make the speech stutter.
       if (!cameraBusy.current && !speaking()) {
         cameraBusy.current = true;
         try {
@@ -489,69 +581,71 @@ export default function App() {
           const data: SonarResult = await res.json();
           failures = 0;
           if (data.clear || data.distance_m === null) {
-            reading.current = null;
             recentDirections.current = [];
+            clearStreak.current += 1;
+            if (clearStreak.current >= OPEN_STREAK) situation.current = OPEN;
+            if (guideOnRef.current) {
+              setGuideDistance(null);
+              setGuideSide(null);
+            }
           } else {
+            clearStreak.current = 0;
             // Direction is the majority of the last three readings; distance is always the newest.
             recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
-            reading.current = {
-              distance: data.distance_m,
-              direction: majority(recentDirections.current),
-              open: data.open ?? null,
-              at: Date.now(),
-            };
+            const side = majority(recentDirections.current);
+            const next = classify(data.distance_m, side, data.open ?? null);
+            // Only "stop" interrupts: cut whatever else is being said so it can be spoken now.
+            if (next.stop && speechBusy.current && !speakingStop.current) {
+              player.pause();
+              Speech.stop();
+            }
+            situation.current = next;
+            if (guideOnRef.current) {
+              setGuideDistance(data.distance_m);
+              setGuideSide(side);
+            }
           }
-          if (sonarOnRef.current) setSonarDistance(reading.current?.distance ?? null);
         } catch (e) {
           console.warn(e);
           failures += 1;
           // Say it once, on the third miss in a row, instead of every second.
           if (failures === 3) {
-            reading.current = null;
-            setSonarDistance(null);
+            situation.current = null;
+            setGuideDistance(null);
+            setGuideSide(null);
             notify(Haptics.NotificationFeedbackType.Error);
-            AccessibilityInfo.announceForAccessibility('Sonar lost connection');
-            Speech.speak('Sonar lost connection');
+            tell('Guide lost connection.');
           }
         } finally {
           cameraBusy.current = false;
         }
       }
-      await sleep(Math.max(0, SONAR_PERIOD_MS - (Date.now() - started)));
+      await sleep(Math.max(0, GUIDE_PERIOD_MS - (Date.now() - started)));
     }
   }
 
-  // Beep and buzz toward the newest reading, faster when closer. Silent when the path is clear.
-  async function beepLoop() {
-    while (sonarOnRef.current) {
-      const r = reading.current;
-      if (!r || Date.now() - r.at > SONAR_STALE_MS || speaking()) {
-        await sleep(150);
+  // Speaks when the situation changes, reminds every few seconds while something is there,
+  // and never talks over a describe sentence or over itself.
+  async function guideVoiceLoop() {
+    let lastKey: string | null = null;
+    let lastSpokenAt = 0;
+    while (guideOnRef.current) {
+      const s = situation.current;
+      if (!s || speaking() || speechBusy.current) {
+        await sleep(100);
         continue;
       }
-      if (r.direction === 'ahead') {
-        // Straight ahead: double beep in both ears, heavy buzz, and a spoken stop when very close.
-        if (prefsRef.current.beeps) toneAhead.seekTo(0).then(() => toneAhead.play()).catch(() => {});
-        buzz(Haptics.ImpactFeedbackStyle.Heavy);
-        if (r.distance <= STOP_DISTANCE_M && Date.now() - lastStopAt.current > STOP_REPEAT_MS) {
-          lastStopAt.current = Date.now();
-          tell(`Stop. Obstacle ahead, very close.${r.open ? ` More room on the ${r.open}.` : ''}`);
-          await sleep(1800);
-          continue;
-        }
-        if (GUIDE_CUE && r.open) {
-          await sleep(320);
-          const guide = r.open === 'left' ? toneLeft : toneRight;
-          guide.volume = 0.35;
-          if (prefsRef.current.beeps) guide.seekTo(0).then(() => guide.play()).catch(() => {});
-        }
-      } else {
-        const tone = r.direction === 'left' ? toneLeft : toneRight;
-        tone.volume = 1;
-        if (prefsRef.current.beeps) tone.seekTo(0).then(() => tone.play()).catch(() => {});
-        buzz(r.distance < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium);
+      const changed = s.key !== lastKey;
+      const remind = s.key !== OPEN.key && Date.now() - lastSpokenAt > GUIDE_REMIND_MS;
+      if (!changed && !remind) {
+        await sleep(100);
+        continue;
       }
-      await sleep(beepGapMs(r.distance, modeRef.current));
+      lastKey = s.key;
+      lastSpokenAt = Date.now();
+      setGuideText(s.text);
+      if (s.stop) buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      await speakPhrase(s.text, s.stop);
     }
   }
 
@@ -562,12 +656,12 @@ export default function App() {
       quietUntil.current = Date.now() + 8000;
       tell('Scanning');
       await buzz(Haptics.ImpactFeedbackStyle.Light);
-      // If sonar is mid-photo, wait for it; the camera takes one picture at a time.
+      // If the guide is mid-photo, wait for it; the camera takes one picture at a time.
       while (cameraBusy.current) await sleep(50);
       cameraBusy.current = true;
       let photo;
       try {
-        photo = await cameraRef.current?.takePictureAsync({ quality: 0.5, shutterSound: !sonarOnRef.current });
+        photo = await cameraRef.current?.takePictureAsync({ quality: 0.5, shutterSound: !guideOnRef.current });
       } finally {
         cameraBusy.current = false;
       }
@@ -592,7 +686,7 @@ export default function App() {
           data.distance_m < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium;
         await buzz(style);
       }
-      // Covers the moment before the clip starts; speaking() keeps sonar quiet until it ends.
+      // Covers the moment before the clip starts; speaking() keeps the guide quiet until it ends.
       quietUntil.current = Date.now() + (data.audio_b64 ? 1500 : 3500);
       if (prefsRef.current.speech) await say(data);
     } catch (e) {
@@ -605,11 +699,10 @@ export default function App() {
   }
 
   const busy = status === 'thinking' || status === 'capturing';
-  const found = !sonarOn && resultVisible && result != null && !result.clear ? result : null;
-  const distance = sonarOn ? sonarDistance : (found?.distance_m ?? null);
+  const found = !guideOn && resultVisible && result != null && !result.clear ? result : null;
+  const distance = guideOn ? guideDistance : (found?.distance_m ?? null);
   const showNumber = !busy && status !== 'error' && distance != null;
-  // Read at render time; sonar re-renders whenever a new distance comes in.
-  const direction = sonarOn ? (reading.current?.direction ?? null) : (found?.direction ?? null);
+  const direction = guideOn ? guideSide : (found?.direction ?? null);
 
   const headline = busy
     ? 'Checking…'
@@ -617,7 +710,7 @@ export default function App() {
       ? 'No connection'
       : showNumber && distance != null
         ? `${distance.toFixed(1)} m`
-        : sonarOn || (resultVisible && result?.clear)
+        : guideOn || (resultVisible && result?.clear)
           ? 'Path clear'
           : 'Ready';
   const detail = busy
@@ -625,11 +718,11 @@ export default function App() {
     : status === 'error'
       ? 'Tap to try again'
       : showNumber
-        ? [direction && DIRECTION_WORD[direction], !sonarOn && found?.height ? `${found.height} height` : null]
+        ? [direction && DIRECTION_WORD[direction], !guideOn && found?.height ? `${found.height} height` : null]
             .filter(Boolean)
             .join(' · ')
-        : sonarOn
-          ? 'Beeps start when something is close'
+        : guideOn
+          ? guideText || 'The voice tells you what changes'
           : resultVisible && result?.clear
             ? 'Nothing in your path'
             : 'Tap anywhere to describe';
@@ -669,17 +762,17 @@ export default function App() {
     </View>
   );
 
-  const sonarButton = (
+  const guideButton = (
     <Pressable
-      style={[styles.sonar, sonarOn ? styles.sonarOn : styles.sonarOff, !cameraPicture && styles.sonarLarge]}
-      onPress={toggleSonar}
+      style={[styles.guide, guideOn ? styles.guideOn : styles.guideOff, !cameraPicture && styles.guideLarge]}
+      onPress={toggleGuide}
       accessibilityRole="switch"
-      accessibilityState={{ checked: sonarOn }}
-      accessibilityLabel="Sonar"
-      accessibilityHint="Beeps faster as you get closer to an obstacle"
+      accessibilityState={{ checked: guideOn }}
+      accessibilityLabel="Guide"
+      accessibilityHint="A voice tells you about obstacles while you walk"
     >
-      <Text style={[styles.sonarText, sonarOn ? styles.sonarTextOn : styles.sonarTextOff]}>
-        {sonarOn ? 'Sonar on' : 'Sonar off'}
+      <Text style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}>
+        {guideOn ? 'Guide on' : 'Guide off'}
       </Text>
     </Pressable>
   );
@@ -743,7 +836,7 @@ export default function App() {
               </Text>
               {detail ? <Text style={styles.detail}>{detail}</Text> : null}
             </View>
-            {sonarButton}
+            {guideButton}
           </View>
         </>
       ) : (
@@ -771,7 +864,7 @@ export default function App() {
                 </Text>
               ) : null}
             </View>
-            {sonarButton}
+            {guideButton}
           </View>
         </>
       )}
@@ -846,13 +939,13 @@ const styles = StyleSheet.create({
   headline: { color: C.blue, fontSize: 34, ...font('bold') },
   headlineNumber: { fontSize: 56, ...font('heavy') },
   detail: { color: C.ink2, fontSize: 18, marginTop: 2, ...font('semibold') },
-  sonar: { minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center' },
-  sonarLarge: { minHeight: 96, borderRadius: 48 },
-  sonarOn: { backgroundColor: C.blue },
-  sonarOff: { backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 2, borderColor: C.blue },
-  sonarText: { fontSize: 26, ...font('bold') },
-  sonarTextOn: { color: '#fff' },
-  sonarTextOff: { color: C.blue },
+  guide: { minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center' },
+  guideLarge: { minHeight: 96, borderRadius: 48 },
+  guideOn: { backgroundColor: C.blue },
+  guideOff: { backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 2, borderColor: C.blue },
+  guideText: { fontSize: 26, ...font('bold') },
+  guideTextOn: { color: '#fff' },
+  guideTextOff: { color: C.blue },
   large: { ...StyleSheet.absoluteFill, paddingTop: 130, paddingHorizontal: 20, paddingBottom: 40 },
   largeMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   largeLabel: { color: C.ink, fontSize: 34, ...font('bold') },

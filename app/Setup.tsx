@@ -43,7 +43,7 @@ export default function Setup(p: Props) {
           <Text style={styles.tagline}>Hear what's in your path.</Text>
           {[
             ['Tap anywhere', "Hear what's ahead and how far."],
-            ['Turn on Sonar', 'Beeps speed up near things.'],
+            ['Turn on Guide', 'A voice tells you what is ahead as you walk.'],
             ['Two-finger double tap', 'Repeats the last warning.'],
           ].map(([t, b]) => (
             <View key={t} style={styles.howTo} accessible>
@@ -146,7 +146,7 @@ export default function Setup(p: Props) {
     <View style={styles.screen}>
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.content}>
-        {header('Pick a guidance voice', 'This voice reads obstacle warnings. Tap one to hear it.')}
+        {header('Pick a guidance voice', 'This voice reads warnings and guides you while you walk. Tap one to hear it.')}
         <Section title="VOICES" />
         <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
       </ScrollView>

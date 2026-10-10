@@ -69,27 +69,21 @@ export default function Settings(p: Props) {
 
         <Section title="SOUND & TOUCH" />
         <ToggleRow
-          label="Speech"
-          hint="Speaks what's ahead after each scan"
+          label="Guidance voice"
+          hint="When off, the phone's own voice reads warnings instead"
           value={p.prefs.speech}
           onChange={(v) => p.onPrefs({ speech: v })}
         />
         <ToggleRow
-          label="Sonar beeps"
-          hint="Plays tones while sonar is on"
-          value={p.prefs.beeps}
-          onChange={(v) => p.onPrefs({ beeps: v })}
-        />
-        <ToggleRow
           label="Haptics"
-          hint="Vibrates for warnings and sonar"
+          hint="Vibrates for warnings and the guide"
           value={p.prefs.haptics}
           onChange={(v) => p.onPrefs({ haptics: v })}
         />
         <SpeedSlider value={p.prefs.speed} onChange={(i) => p.onPrefs({ speed: i })} />
 
         <Section title="GUIDANCE VOICE" />
-        <Caption>The voice that reads obstacle warnings. Tap one to hear it.</Caption>
+        <Caption>The voice that reads warnings and guides you while you walk. Tap one to hear it.</Caption>
         <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
         <LinkRow
           label={CLONE_LABEL[p.cloneStep]}
