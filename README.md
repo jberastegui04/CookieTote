@@ -57,7 +57,7 @@ Full result for describe mode. Slower, called once per tap. Also takes an option
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `height` | string or null | `foot`, `waist`, or `head` |
 | `box` | list of 4 numbers or null | obstacle outline for the overlay, as x, y, width, height in 0 to 1 of the image |
-| `open` | string or null | `left` or `right` if that side of the lane has clearly more room than the obstacle, else null. The sentence ends with "clear on the left" when set |
+| `open` | string or null | `left` or `right` if that side of the lane has nothing within the warning distance, else null. The sentence ends with "More room on the left" when set (never "clear": it only checks a narrow strip and can't see low objects) |
 | `audio_b64` | string or null | ElevenLabs WAV of the sentence (16 kHz mono, short silence at both ends), base64. Null if the key is missing or ElevenLabs fails, so the app falls back to expo-speech |
 
 ### POST /sonar
@@ -69,7 +69,7 @@ Fast result for sonar mode. Depth only, no detection, no speech. Called about on
 | `clear` | boolean | true if nothing is in the path |
 | `distance_m` | number or null | distance to the closest obstacle |
 | `direction` | string or null | `left`, `ahead`, or `right` |
-| `open` | string or null | `left` or `right` if that side has clearly more room, else null |
+| `open` | string or null | `left` or `right` if that side has nothing within the warning distance, else null |
 
 ### GET /voices
 

@@ -38,9 +38,6 @@ BAND_MARGIN_M = 0.3
 # The model reads phone photos too far away. Multiply by this to get real meters. Fit to photos
 # with tape-measured distances (tune.py): indoor reads about 1.25x too far, outdoor about 2.9x.
 DEPTH_SCALE = {"indoor": 0.8, "outdoor": 0.35}
-# A side column counts as "open" (more room to go around) if its closest reading is at least this
-# much farther than the obstacle.
-OPEN_MARGIN_M = 1.0
 # At or under this, say "very close" instead of a number.
 VERY_CLOSE_M = 0.5
 # Friendlier names for DETR's COCO labels.
@@ -107,7 +104,11 @@ def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
 
 
 def open_side(cells: dict, best: dict, mode: str) -> str | None:
-    """The side column with clearly more room than the obstacle, or None."""
+    """The side column with nothing inside the warning distance, or None.
+
+    Only a narrow strip of the frame and nothing below the floor cutoff, so it's phrased as
+    "more room", never "clear": it must not read as permission to step that way.
+    """
     room = {}
     for side in ("left", "right"):
         if side != best["direction"]:
@@ -115,7 +116,7 @@ def open_side(cells: dict, best: dict, mode: str) -> str | None:
     if not room:
         return None
     side = max(room, key=room.get)
-    return side if room[side] - best["distance"] >= OPEN_MARGIN_M else None
+    return side if room[side] > WARN_DISTANCE_M[mode] else None
 
 
 def _box(depth: np.ndarray, distance: float, mode: str) -> list[float] | None:
@@ -197,7 +198,7 @@ def to_sentence(
 ) -> str:
     if distance_m is None:
         return "Path clear"
-    tail = f". Clear on the {open_side}" if open_side else ""
+    tail = f". More room on the {open_side}" if open_side else ""
     meters = round(distance_m * 2) / 2  # round to half meters
     unit = "meter" if meters == 1 else "meters"
     # "1 meter ahead" reads as one phrase; "1 meter, slightly left" needs the pause.

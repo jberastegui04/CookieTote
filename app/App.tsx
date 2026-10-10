@@ -412,7 +412,7 @@ export default function App() {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         if (r.distance <= STOP_DISTANCE_M && Date.now() - lastStopAt.current > STOP_REPEAT_MS) {
           lastStopAt.current = Date.now();
-          tell(`Stop. Obstacle ahead, very close.${r.open ? ` Clear on the ${r.open}.` : ''}`);
+          tell(`Stop. Obstacle ahead, very close.${r.open ? ` More room on the ${r.open}.` : ''}`);
           await sleep(1800);
           continue;
         }

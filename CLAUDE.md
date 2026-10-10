@@ -23,7 +23,7 @@ Both endpoints: POST multipart with `image` (photo) and `mode` ("indoor" | "outd
 
 `POST /sonar` returns `clear`, `distance_m`, `direction`, `open` only.
 
-Both `/describe` and `/sonar` include `open` ("left" | "right" | null): the side column with clearly more room than the obstacle. Describe sentences end with "clear on the left" when set. Sonar tones: single beep in one ear = obstacle that side; lower double beep both ears = ahead, then a soft beep in the open ear; spoken "Stop" under 0.7 m ahead.
+Both `/describe` and `/sonar` include `open` ("left" | "right" | null): the side column with nothing within the warning distance. Describe sentences end with "More room on the left" when set; never say "clear", since it checks only a narrow strip and can't see low objects. Sonar tones: single beep in one ear = obstacle that side; lower double beep both ears = ahead, then a soft beep in the open ear; spoken "Stop" under 0.7 m ahead.
 
 `GET /voices` returns `default` (id) and `voices` ([{id, name}], cloned first). `GET /voices/{id}/sample.wav` returns a sample WAV. `POST /voices/clone` (form: `audio`, `consent=true`) makes one ElevenLabs instant clone, "Trusted voice", replacing the previous one; needs a paid ElevenLabs plan. Voice clips are cached by (voice_id, sentence).
 
