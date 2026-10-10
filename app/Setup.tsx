@@ -149,6 +149,7 @@ export default function Setup(p: Props) {
         {header('Pick a guidance voice', 'This voice reads warnings and guides you while you walk. Tap one to hear it.')}
         <Section title="VOICES" />
         <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
+        <Caption>You can add a trusted person's voice later, in Settings.</Caption>
       </ScrollView>
       <View style={styles.footer}>
         <BigButton label="Finish" hint="Opens the camera" onPress={p.onFinish} />
