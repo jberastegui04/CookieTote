@@ -31,14 +31,24 @@ def decode_image(data: bytes) -> Image.Image:
     return img
 
 
-def log_reading(endpoint: str, img: Image.Image, mode: str, warning: str, result: dict) -> None:
-    """One line per frame in the Space's logs: what was decided, never the image. For tracing a wrong "Stop"."""
+def log_reading(
+    endpoint: str, img: Image.Image, mode: str, warning: str, result: dict, started: float, timing: str | None = None
+) -> None:
+    """One line per frame in the Space's logs: what was decided, never the image. For tracing a wrong "Stop".
+    Also stamps result["server_ms"] (time since the upload finished arriving; FastAPI reads the whole
+    body before the endpoint runs) and logs the phone's timing of its previous frame, for lag work."""
+    result["server_ms"] = round((time.perf_counter() - started) * 1000)
     o = result.get("obstacle", result)
     obstacle = "clear" if o.get("clear") else f"{o.get('distance_m')}m-{o.get('direction')}"
     extra = ""
     if "target" in result:
         extra = f" found={result['found']} match={result['match']} bearing={result['bearing_deg']} dist={result['distance_m']}"
-    print(f"{endpoint} {img.size[0]}x{img.size[1]} scene={mode} warning={warning} obstacle={obstacle}{extra}", flush=True)
+    phone = f" phone[{timing[:120]}]" if timing else ""
+    print(
+        f"{endpoint} {img.size[0]}x{img.size[1]} scene={mode} warning={warning} obstacle={obstacle}{extra}"
+        f" server_ms={result['server_ms']}{phone}",
+        flush=True,
+    )
 
 
 async def read_frame(image: UploadFile, mode: str, warning: str, units: str = "meters") -> tuple[Image.Image, str]:
@@ -71,11 +81,12 @@ async def describe(
     warning: str = Form("normal"),
     units: str = Form("meters"),
 ):
+    started = time.perf_counter()
     img, mode = await read_frame(image, mode, warning, units)
     # Models run in a worker thread so a sonar frame and a tap don't wait on each other.
     result = await run_in_threadpool(pipeline.describe, img, mode, warning, units)
     result["scene"] = mode
-    log_reading("describe", img, mode, warning, result)
+    log_reading("describe", img, mode, warning, result, started)
     # Null if ElevenLabs is unavailable, so the app speaks the sentence with expo-speech.
     result["audio_b64"] = await run_in_threadpool(voice.speak_b64, result["sentence"], voice_id)
     return result
@@ -139,8 +150,10 @@ async def find(
     description: str | None = Form(None),
     warning: str = Form("normal"),
     units: str = Form("meters"),
+    timing: str | None = Form(None),  # the phone's timing of its previous frame, logged for lag work
 ):
     """target from the picker, and/or a description like "red bench" (which can name the target itself)."""
+    started = time.perf_counter()
     description = (description or "").strip()[: pipeline.DESCRIPTION_MAX_CHARS] or None
     asked = (target or "").strip().lower() or None
     known = pipeline.target_from(asked if asked in pipeline.FIND_TARGETS else None, description)
@@ -154,7 +167,7 @@ async def find(
     img, mode = await read_frame(image, mode, warning, units)
     result = await run_in_threadpool(pipeline.find, img, mode, target, description, warning, units)
     result["scene"] = mode
-    log_reading("find", img, mode, warning, result)
+    log_reading("find", img, mode, warning, result, started, timing)
     return result
 
 
@@ -266,11 +279,17 @@ async def voice_sample(voice_id: str):
 
 
 @app.post("/sonar")
-async def sonar(image: UploadFile = File(...), mode: str = Form("indoor"), warning: str = Form("normal")):
+async def sonar(
+    image: UploadFile = File(...),
+    mode: str = Form("indoor"),
+    warning: str = Form("normal"),
+    timing: str | None = Form(None),  # the phone's timing of its previous frame, logged for lag work
+):
+    started = time.perf_counter()
     img, mode = await read_frame(image, mode, warning)
     result = await run_in_threadpool(pipeline.sonar, img, mode, warning)
     result["scene"] = mode
-    log_reading("sonar", img, mode, warning, result)
+    log_reading("sonar", img, mode, warning, result, started, timing)
     return result
 
 
