@@ -29,13 +29,15 @@ import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
 import Setup, { type Vision } from './Setup';
-import { DEFAULT_PREFS, SPEEDS, type Prefs } from './prefs';
+import { DEFAULT_PREFS, formatDistance, SPEEDS, type Prefs } from './prefs';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // Your laptop's address on the same Wi-Fi, set in app/.env (see README).
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
 
-type Mode = 'indoor' | 'outdoor';
+// The Where are you setting. 'auto' lets the server guess from the photo; it says what it used in `scene`.
+type Mode = 'auto' | 'indoor' | 'outdoor';
+type Scene = 'indoor' | 'outdoor';
 
 // Matches POST /describe in the README. Keep in sync with backend/main.py.
 type DescribeResult = {
@@ -81,6 +83,10 @@ type Voice = { id: string; name: string };
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 const CLONE_MAX_MS = 30000;
 const VOICE_KEY = 'voice_id';
+// The server always names the cloned voice this (CLONE_NAME in voice.py) and uses the name to
+// replace it, so a new name chosen in the app is kept on the phone and only changes what's shown.
+const TRUSTED_NAME = 'Trusted voice';
+const TRUSTED_NAME_KEY = 'trusted_name';
 const MODE_KEY = 'mode';
 const CAMERA_KEY = 'camera_picture';
 const SETUP_KEY = 'setup_done';
@@ -240,11 +246,13 @@ export default function App() {
   const cameraRef = useRef<CameraView>(null);
   const player = useAudioPlayer(null);
   const lastClip = useRef<File | null>(null);
-  const [mode, setMode] = useState<Mode>('indoor');
+  const [mode, setMode] = useState<Mode>('auto');
+  const [scene, setScene] = useState<Scene | null>(null); // from the newest response
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<DescribeResult | null>(null);
   // Voice picker. The list comes from GET /voices; the choice is remembered on the phone.
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [trustedName, setTrustedName] = useState('');
   const [voiceId, setVoiceId] = useState<string | null>(null);
   const voiceIdRef = useRef<string | null>(null);
   const screenReader = useRef(false);
@@ -258,7 +266,7 @@ export default function App() {
   const [guideSide, setGuideSide] = useState<Side | null>(null);
   const [guideText, setGuideText] = useState('');
   const guideOnRef = useRef(false);
-  const modeRef = useRef<Mode>('indoor');
+  const modeRef = useRef<Mode>('auto');
   const cameraBusy = useRef(false); // one photo at a time, shared by describe and guide
   const quietUntil = useRef(0); // guide stays quiet while a describe sentence is being spoken
   const situation = useRef<Situation | null>(null); // newest reading, sorted; null until the first one
@@ -343,13 +351,16 @@ export default function App() {
           setPrefs(loaded);
           setTapHaptics(loaded.haptics);
         }
-        if (savedMode === 'indoor' || savedMode === 'outdoor') {
+        if (savedMode === 'auto' || savedMode === 'indoor' || savedMode === 'outdoor') {
           modeRef.current = savedMode;
           setMode(savedMode);
         }
         if (savedCamera === 'off') setCameraPicture(false);
       })
       .catch(() => setSetupDone(false));
+    AsyncStorage.getItem(TRUSTED_NAME_KEY)
+      .then((saved) => saved && setTrustedName(saved))
+      .catch(() => {});
     AsyncStorage.getItem(VOICE_KEY)
       .then((saved) => {
         if (saved) {
@@ -376,13 +387,18 @@ export default function App() {
   }, []);
 
   // If the font fails to load, carry on with the system font rather than a blank screen.
+  const hasTrusted = voices.some((v) => v.name === TRUSTED_NAME);
+  const shownVoices = trustedName
+    ? voices.map((v) => (v.name === TRUSTED_NAME ? { ...v, name: trustedName } : v))
+    : voices;
+
   if (setupDone === null || (!fontsLoaded && !fontError)) return <View style={[styles.screen, styles.blank]} />;
 
   if (!setupDone) {
     return (
       <Setup
         onVision={chooseVision}
-        voices={voices}
+        voices={shownVoices}
         voiceId={voiceId}
         onPickVoice={pickVoice}
         onFinish={finishSetup}
@@ -468,6 +484,20 @@ export default function App() {
       Speech.stop();
       Speech.speak(text);
     }
+  }
+
+  // The Settings every request carries (see the README's settings table). distance_m always comes back
+  // in meters; units only changes the spoken sentences.
+  function appendSettings(form: FormData) {
+    form.append('mode', modeRef.current);
+    form.append('warning', prefsRef.current.warning);
+    form.append('units', prefsRef.current.units);
+  }
+
+  // Every response says which scene it used; with Auto, that's what the top chip shows.
+  function noteScene(data: unknown) {
+    const sc = (data as { scene?: unknown }).scene;
+    if (sc === 'indoor' || sc === 'outdoor') setScene(sc);
   }
 
   function changeMode(next: Mode) {
@@ -569,6 +599,12 @@ export default function App() {
     setVoiceId(v.id);
     AsyncStorage.setItem(VOICE_KEY, v.id).catch(() => {});
     fetchPhrase(SCANNING);
+  }
+
+  function renameTrusted(name: string) {
+    const clean = name.trim().slice(0, 30);
+    setTrustedName(clean);
+    AsyncStorage.setItem(TRUSTED_NAME_KEY, clean).catch(() => {});
   }
 
   // One button, three taps: consent notice, start recording, stop and upload.
@@ -1113,7 +1149,7 @@ export default function App() {
           const n = ++seq;
           const form = new FormData();
           form.append('image', new File(uri));
-          form.append('mode', modeRef.current);
+          appendSettings(form);
           for (const [k, v] of Object.entries(fields())) form.append(k, v);
           inFlight += 1;
           // Not awaited: the next capture starts while this one is on its way.
@@ -1121,6 +1157,7 @@ export default function App() {
             .then(async (res) => {
               if (!res.ok) throw new Error(`Server ${res.status}`);
               const data = (await res.json()) as T;
+              noteScene(data);
               if (n <= applied || !isOn()) return;
               applied = n;
               failures = 0;
@@ -1191,12 +1228,13 @@ export default function App() {
       const form = new FormData();
       // Expo's fetch rejects React Native's old { uri, name, type } parts; it needs a real File.
       form.append('image', new File(await shrink(photo.uri, DESCRIBE_WIDTH_PX)));
-      form.append('mode', mode);
+      appendSettings(form);
       if (voiceIdRef.current) form.append('voice_id', voiceIdRef.current);
 
       const res = await fetch(`${API_URL}/describe`, { method: 'POST', body: form, headers: HEADERS });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       const data: DescribeResult = await res.json();
+      noteScene(data);
       setResult(data);
       setStatus('idle');
 
@@ -1248,7 +1286,7 @@ export default function App() {
     : status === 'error'
       ? 'No connection'
       : showNumber && distance != null
-        ? `${distance.toFixed(1)} m`
+        ? formatDistance(distance, prefs.units)
         : findOn
           ? capitalize(findTarget ?? 'Find')
           : arrived
@@ -1287,20 +1325,22 @@ export default function App() {
     box = { left: offX + x * photoW, top: offY + y * scale, width: w * photoW, height: h * scale };
   }
 
+  const sceneName = scene === 'outdoor' ? 'Outdoor' : 'Indoor';
+  const whereText = mode === 'auto' ? (scene ? `${sceneName} · Auto` : 'Auto') : mode === 'indoor' ? 'Indoor' : 'Outdoor';
+  const whereLabel =
+    mode === 'auto' ? (scene ? `${sceneName}, detected automatically` : 'Indoor or outdoor, detected automatically') : whereText;
+
   const topBar = (
     <View style={styles.topBar} pointerEvents="box-none">
-      <Pressable
-        style={({ pressed }) => [styles.chip, !cameraPicture && styles.chipLarge, pressed && styles.pressed]}
-        onPress={() => {
-          tapHaptic();
-          changeMode(mode === 'indoor' ? 'outdoor' : 'indoor');
-        }}
-        accessibilityRole="button"
-        accessibilityLabel={mode === 'indoor' ? 'Indoor' : 'Outdoor'}
-        accessibilityHint="Double tap to switch between indoor and outdoor"
+      {/* Where the app thinks you are. Not a button: change it in Settings. */}
+      <View
+        style={[styles.chip, !cameraPicture && styles.chipLarge]}
+        accessible
+        accessibilityRole="text"
+        accessibilityLabel={whereLabel}
       >
-        <Text style={styles.chipText}>{mode === 'indoor' ? 'Indoor' : 'Outdoor'}</Text>
-      </Pressable>
+        <Text style={styles.chipText}>{whereText}</Text>
+      </View>
       <Pressable
         style={({ pressed }) => [styles.chip, !cameraPicture && styles.chipLarge, pressed && styles.pressed]}
         onPress={openSettings}
@@ -1396,7 +1436,7 @@ export default function App() {
       />
 
       {findOn && findTarget ? (
-        <FindScreen target={findTarget} description={findDescriptionRef.current} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
+        <FindScreen target={findTarget} units={prefs.units} description={findDescriptionRef.current} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} />
       ) : cameraPicture ? (
         <>
           {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}
@@ -1415,7 +1455,7 @@ export default function App() {
                 <View style={[styles.tag, { left: box.left, top: Math.max(SAFE.top + 72, box.top - 48) }]}>
                   <Text style={styles.tagText}>
                     {label ?? 'Obstacle'}
-                    {distance != null ? ` · ${distance.toFixed(1)} m` : ''}
+                    {distance != null ? ` · ${formatDistance(distance, prefs.units)}` : ''}
                   </Text>
                 </View>
               </>
@@ -1476,7 +1516,10 @@ export default function App() {
           onCameraPicture={changeCameraPicture}
           prefs={prefs}
           onPrefs={updatePrefs}
-          voices={voices}
+          voices={shownVoices}
+          hasTrusted={hasTrusted}
+          trustedName={trustedName}
+          onRenameTrusted={renameTrusted}
           voiceId={voiceId}
           onPickVoice={pickVoice}
           cloneStep={cloneStep}

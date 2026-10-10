@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, ToggleRow, VoiceList } from './controls';
 import type { Prefs } from './prefs';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
-type Mode = 'indoor' | 'outdoor';
+type Mode = 'auto' | 'indoor' | 'outdoor';
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 type Voice = { id: string; name: string };
 
@@ -18,6 +18,9 @@ type Props = {
   voices: Voice[];
   voiceId: string | null;
   onPickVoice: (v: Voice) => void;
+  hasTrusted: boolean;
+  trustedName: string;
+  onRenameTrusted: (name: string) => void;
   cloneStep: CloneStep;
   onClone: () => void;
   onReplaySetup: () => void;
@@ -35,6 +38,7 @@ export default function Settings(p: Props) {
   // The voice list opens as its own page, like a row in iPhone Settings.
   const [page, setPage] = useState<'main' | 'voice'>('main');
   const [showLimits, setShowLimits] = useState(false);
+  const [nameFocused, setNameFocused] = useState(false);
   const voiceName = p.voices.find((v) => v.id === p.voiceId)?.name ?? 'Default';
 
   if (page === 'voice') {
@@ -46,7 +50,7 @@ export default function Settings(p: Props) {
           onBack={() => setPage('main')}
           backHint="Returns to settings"
         />
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Section title="VOICES" />
           <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
           <Section title="YOUR OWN" />
@@ -56,6 +60,26 @@ export default function Settings(p: Props) {
             onPress={p.onClone}
             active={p.cloneStep === 'recording'}
           />
+          {p.hasTrusted ? (
+            <>
+              <Text style={[styles.subLabel, styles.nameLabel]}>Name it</Text>
+              <TextInput
+                style={[styles.input, nameFocused && styles.inputFocused]}
+                defaultValue={p.trustedName}
+                onFocus={() => setNameFocused(true)}
+                onBlur={() => setNameFocused(false)}
+                onEndEditing={(e) => p.onRenameTrusted(e.nativeEvent.text)}
+                placeholder="Trusted voice"
+                placeholderTextColor={C.ink2}
+                maxLength={30}
+                returnKeyType="done"
+                autoCapitalize="words"
+                accessibilityLabel="Name for the trusted voice"
+                accessibilityHint="For example Mom. Shown in the voice list instead of Trusted voice."
+              />
+              <Caption>Leave it empty to go back to "Trusted voice".</Caption>
+            </>
+          ) : null}
         </ScrollView>
       </View>
     );
@@ -71,11 +95,34 @@ export default function Settings(p: Props) {
           value={p.mode}
           onChange={p.onMode}
           options={[
+            { value: 'auto', label: 'Auto', hint: 'Works out indoor or outdoor from the camera' },
             { value: 'indoor', label: 'Indoor', hint: 'Warns at about 2 meters' },
             { value: 'outdoor', label: 'Outdoor', hint: 'Warns at about 4 meters' },
           ]}
         />
-        <Caption>Indoor warns at about 2 m. Outdoor warns at about 4 m.</Caption>
+        <Caption>Auto works it out from the camera. Indoors it warns sooner than outdoors.</Caption>
+
+        <Section title="DISTANCE" />
+        <Segment
+          value={p.prefs.units}
+          onChange={(units) => p.onPrefs({ units })}
+          options={[
+            { value: 'meters', label: 'Meters', hint: 'Distances in meters' },
+            { value: 'feet', label: 'Feet', hint: 'Distances in feet' },
+          ]}
+        />
+        <View style={styles.gap} />
+        <Text style={styles.subLabel}>Warn me</Text>
+        <Segment
+          value={p.prefs.warning}
+          onChange={(warning) => p.onPrefs({ warning })}
+          options={[
+            { value: 'close', label: 'Close', hint: 'Warns later, when things are nearer' },
+            { value: 'normal', label: 'Normal', hint: 'The usual warning distance' },
+            { value: 'early', label: 'Early', hint: 'Warns sooner, so you have more time to stop' },
+          ]}
+        />
+        <Caption>Early gives you more time to stop. Close only warns about things nearby.</Caption>
 
         <Section title="SCREEN" />
         <ToggleRow
@@ -127,6 +174,21 @@ export default function Settings(p: Props) {
 }
 
 const styles = StyleSheet.create({
+  gap: { height: SPACE.lg },
+  nameLabel: { marginTop: SPACE.xl },
+  input: {
+    minHeight: 72,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: C.ink2,
+    backgroundColor: C.bg,
+    paddingHorizontal: GUTTER,
+    color: C.ink,
+    fontSize: 22,
+    ...font('semibold'),
+  },
+  inputFocused: { borderColor: C.blue, borderWidth: 3 },
+  subLabel: { color: C.ink, fontSize: 20, marginBottom: SPACE.sm, ...font('bold') },
   screen: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
   // The first section heading adds its own space above, so the content starts close to the band.
   content: { paddingHorizontal: GUTTER, paddingTop: SPACE.sm, paddingBottom: SAFE.bottom + SPACE.xxl },

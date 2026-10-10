@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Tap } from './controls';
+import { formatDistance, type Units } from './prefs';
 import { capitalize, HALF_FOV_DEG, type FindResult } from './find';
 import { useReduceMotion } from './motion';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
@@ -37,6 +38,7 @@ function useGlide(target: number | null, reduce: boolean) {
 
 type Props = {
   target: string;
+  units: Units;
   description?: string | null; // the user's words from the picker, like "red bench"
   result: FindResult | null; // newest POST /find answer; null until the first one arrives
   cameraPicture: boolean; // false: plain white screen with bigger text (camera still runs underneath)
@@ -72,7 +74,7 @@ export default function FindScreen(p: Props) {
   const matchNote = p.description && found && r.box ? (r.match === 'yes' ? 'Looks like a match' : r.match === 'possible' ? 'Possible match' : null) : null;
   const detail = !r ? 'Hold the phone up and turn slowly.' : !found ? 'Turn slowly.' : matchNote;
   const arrow = found && r.direction ? ARROW[r.direction] : null;
-  const distance = found && r.distance_m != null ? `${r.distance_m.toFixed(1)} m away` : null;
+  const distance = found && r.distance_m != null ? `${formatDistance(r.distance_m, p.units)} away` : null;
 
   // Bearing meter: where the target sits left to right, from -26 to 26 degrees.
   const bearing = found && r.bearing_deg != null ? r.bearing_deg : null;
@@ -116,7 +118,7 @@ export default function FindScreen(p: Props) {
             <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop }]}>
               <Text style={styles.tagText}>
                 {name}
-                {r?.distance_m != null ? ` · ${r.distance_m.toFixed(1)} m` : ''}
+                {r?.distance_m != null ? ` · ${formatDistance(r.distance_m, p.units)}` : ''}
               </Text>
             </Animated.View>
           </>
