@@ -54,6 +54,19 @@ type SonarResult = {
 };
 type Side = 'left' | 'ahead' | 'right';
 
+// Matches POST /find in the README.
+type FindResult = {
+  found: boolean;
+  target: string;
+  direction: Side | null;
+  bearing_deg: number | null; // right is positive
+  distance_m: number | null;
+  centered: boolean;
+  box: [number, number, number, number] | null;
+  sentence: string;
+  obstacle: SonarResult;
+};
+
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
 
 type Voice = { id: string; name: string };
@@ -86,6 +99,11 @@ const STOP_DISTANCE_M = 0.7;
 const CLOSE_DISTANCE_M = 1.2;
 // "Path looks open" needs this many clear readings in a row, so one noisy frame can't say it.
 const OPEN_STREAK = 2;
+// Find mode: repeat the sentence this often while it hasn't changed, and pulse harder as the
+// target nears the center of the frame (bearing 0).
+const FIND_REMIND_MS = 3000;
+const FIND_AHEAD_DEG = 8;
+const FIND_NEAR_DEG = 16;
 
 type Situation = { key: string; text: string; stop: boolean };
 const OPEN: Situation = { key: 'open', text: 'Path looks open.', stop: false };
@@ -195,6 +213,14 @@ export default function App() {
   const situation = useRef<Situation | null>(null); // newest reading, sorted; null until the first one
   const recentDirections = useRef<Side[]>([]); // last few readings, so one noisy frame can't flip the side
   const clearStreak = useRef(0);
+  // Find mode: where a chosen object is. Shares the frame loop and the voice with the guide.
+  const [findOn, setFindOn] = useState(false);
+  const [findTarget, setFindTarget] = useState<string | null>(null);
+  const [targets, setTargets] = useState<string[]>([]);
+  const [showTargets, setShowTargets] = useState(false);
+  const [findInfo, setFindInfo] = useState<FindResult | null>(null);
+  const findOnRef = useRef(false);
+  const findTargetRef = useRef<string | null>(null);
   // The guide voice: one phrase at a time, files cached per voice, and the phone's voice as fallback.
   const speechBusy = useRef(false);
   const speakingStop = useRef(false);
@@ -262,6 +288,7 @@ export default function App() {
     // Stop the guide loops if the screen goes away.
     return () => {
       guideOnRef.current = false;
+      findOnRef.current = false;
       sub.remove();
     };
   }, []);
@@ -474,6 +501,7 @@ export default function App() {
         return;
       }
       if (guideOnRef.current) toggleGuide();
+      if (findOnRef.current) stopFind();
       try {
         // iOS only records when the audio session allows it; turned back off after the recording.
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -557,8 +585,13 @@ export default function App() {
     }
   }
 
+  function loopsOn() {
+    return guideOnRef.current || findOnRef.current;
+  }
+
   function toggleGuide() {
     const on = !guideOnRef.current;
+    if (on && findOnRef.current) stopFind(false);
     guideOnRef.current = on;
     setGuideOn(on);
     situation.current = null;
@@ -570,9 +603,57 @@ export default function App() {
     buzz(Haptics.ImpactFeedbackStyle.Light);
     if (on) {
       quietUntil.current = Date.now() + 1500;
-      guideLoop();
-      guideVoiceLoop();
+      frameLoop(() => guideOnRef.current, '/sonar', () => ({}), applyGuide);
+      voiceLoop();
       prefetchPhrases();
+    }
+  }
+
+  // Find mode. Tap Find: pick a target, then frames go to /find until you tap again.
+  async function openTargets() {
+    tapHaptic();
+    if (findOnRef.current) {
+      stopFind();
+      return;
+    }
+    setShowTargets(true);
+    if (targets.length === 0) {
+      try {
+        const res = await fetch(`${API_URL}/find/targets`, { headers: HEADERS });
+        setTargets(((await res.json()) as { targets: string[] }).targets);
+      } catch (e) {
+        console.warn(e);
+        tell('Could not load the list. Try again.');
+        setShowTargets(false);
+      }
+    }
+  }
+
+  function startFind(target: string) {
+    setShowTargets(false);
+    if (guideOnRef.current) toggleGuide();
+    findTargetRef.current = target;
+    setFindTarget(target);
+    findOnRef.current = true;
+    setFindOn(true);
+    situation.current = null;
+    setFindInfo(null);
+    buzz(Haptics.ImpactFeedbackStyle.Light);
+    tell(`Finding ${target}. Turn slowly.`);
+    quietUntil.current = Date.now() + 1800;
+    frameLoop(() => findOnRef.current, '/find', () => ({ target }), applyFind);
+    voiceLoop();
+    fetchPhrase(`No ${target} yet. Turn slowly.`);
+  }
+
+  function stopFind(announce = true) {
+    findOnRef.current = false;
+    setFindOn(false);
+    situation.current = null;
+    setFindInfo(null);
+    if (announce) {
+      buzz(Haptics.ImpactFeedbackStyle.Light);
+      tell('Find off');
     }
   }
 
@@ -639,48 +720,79 @@ export default function App() {
     }
   }
 
-  // Guide frames: capture, shrink, send. Up to two frames wait on the server at once, and an
-  // answer is applied only if it's newer than the last one applied.
-  async function guideLoop() {
+  // Cuts whatever the voice is saying so a "stop" can be spoken right away.
+  function interruptForStop(next: Situation) {
+    if (next.stop && speechBusy.current && !speakingStop.current) {
+      player.pause();
+      Speech.stop();
+    }
+  }
+
+  function applyGuide(data: SonarResult) {
+    if (data.clear || data.distance_m === null) {
+      recentDirections.current = [];
+      clearStreak.current += 1;
+      if (clearStreak.current >= OPEN_STREAK) situation.current = OPEN;
+      setGuideDistance(null);
+      setGuideSide(null);
+      return;
+    }
+    clearStreak.current = 0;
+    // Direction is the majority of the last three readings; distance is always the newest.
+    recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
+    const side = majority(recentDirections.current);
+    const next = classify(data.distance_m, side, data.open ?? null);
+    interruptForStop(next);
+    situation.current = next;
+    // A pulse on every reading, stronger when closer. Never waits on speech.
+    buzz(
+      data.distance_m < 1
+        ? Haptics.ImpactFeedbackStyle.Heavy
+        : data.distance_m < 2
+          ? Haptics.ImpactFeedbackStyle.Medium
+          : Haptics.ImpactFeedbackStyle.Light,
+    );
+    setGuideDistance(data.distance_m);
+    setGuideSide(side);
+  }
+
+  function applyFind(data: FindResult) {
+    setFindInfo(data);
+    // An obstacle right in front wins over the target.
+    const o = data.obstacle;
+    const danger = !o.clear && o.distance_m !== null ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null) : null;
+    if (danger?.stop) {
+      interruptForStop(danger);
+      situation.current = danger;
+      buzz(Haptics.ImpactFeedbackStyle.Heavy);
+      return;
+    }
+    situation.current = { key: data.sentence, text: data.sentence, stop: false };
+    if (!data.found || data.bearing_deg === null) return;
+    // Stronger as the target nears the center; a double pulse when you're facing it.
+    const off = Math.abs(data.bearing_deg);
+    const style =
+      off <= FIND_AHEAD_DEG
+        ? Haptics.ImpactFeedbackStyle.Heavy
+        : off <= FIND_NEAR_DEG
+          ? Haptics.ImpactFeedbackStyle.Medium
+          : Haptics.ImpactFeedbackStyle.Light;
+    buzz(style);
+    if (data.centered) setTimeout(() => buzz(Haptics.ImpactFeedbackStyle.Heavy), 140);
+  }
+
+  // Frames for the guide and for find: capture, shrink, send. Up to two frames wait on the server
+  // at once, and an answer is applied only if it's newer than the last one applied.
+  async function frameLoop<T>(
+    isOn: () => boolean,
+    endpoint: string,
+    fields: () => Record<string, string>,
+    apply: (data: T) => void,
+  ) {
     let seq = 0;
     let applied = 0;
     let inFlight = 0;
     let failures = 0;
-
-    const apply = (n: number, data: SonarResult) => {
-      if (n <= applied || !guideOnRef.current) return;
-      applied = n;
-      failures = 0;
-      if (data.clear || data.distance_m === null) {
-        recentDirections.current = [];
-        clearStreak.current += 1;
-        if (clearStreak.current >= OPEN_STREAK) situation.current = OPEN;
-        setGuideDistance(null);
-        setGuideSide(null);
-        return;
-      }
-      clearStreak.current = 0;
-      // Direction is the majority of the last three readings; distance is always the newest.
-      recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
-      const side = majority(recentDirections.current);
-      const next = classify(data.distance_m, side, data.open ?? null);
-      // Only "stop" interrupts: cut whatever else is being said so it can be spoken now.
-      if (next.stop && speechBusy.current && !speakingStop.current) {
-        player.pause();
-        Speech.stop();
-      }
-      situation.current = next;
-      // A pulse on every reading, stronger when closer. Never waits on speech.
-      buzz(
-        data.distance_m < 1
-          ? Haptics.ImpactFeedbackStyle.Heavy
-          : data.distance_m < 2
-            ? Haptics.ImpactFeedbackStyle.Medium
-            : Haptics.ImpactFeedbackStyle.Light,
-      );
-      setGuideDistance(data.distance_m);
-      setGuideSide(side);
-    };
 
     const fail = () => {
       failures += 1;
@@ -690,11 +802,11 @@ export default function App() {
         setGuideDistance(null);
         setGuideSide(null);
         notify(Haptics.NotificationFeedbackType.Error);
-        tell('Guide lost connection.');
+        tell('Lost connection.');
       }
     };
 
-    while (guideOnRef.current) {
+    while (isOn()) {
       const started = Date.now();
       // No frames while a describe clip is playing (taking one can make it stutter), and no more
       // than GUIDE_IN_FLIGHT frames waiting on the server.
@@ -720,12 +832,17 @@ export default function App() {
           const form = new FormData();
           form.append('image', new File(uri));
           form.append('mode', modeRef.current);
+          for (const [k, v] of Object.entries(fields())) form.append(k, v);
           inFlight += 1;
           // Not awaited: the next capture starts while this one is on its way.
-          fetch(`${API_URL}/sonar`, { method: 'POST', body: form, headers: HEADERS })
+          fetch(`${API_URL}${endpoint}`, { method: 'POST', body: form, headers: HEADERS })
             .then(async (res) => {
               if (!res.ok) throw new Error(`Server ${res.status}`);
-              apply(n, (await res.json()) as SonarResult);
+              const data = (await res.json()) as T;
+              if (n <= applied || !isOn()) return;
+              applied = n;
+              failures = 0;
+              apply(data);
             })
             .catch((e) => {
               console.warn(e);
@@ -742,17 +859,21 @@ export default function App() {
 
   // Speaks when the situation changes, reminds while something is there (sooner when it's close),
   // and never talks over a describe sentence or over itself.
-  async function guideVoiceLoop() {
+  async function voiceLoop() {
     let lastKey: string | null = null;
     let lastSpokenAt = 0;
-    while (guideOnRef.current) {
+    while (loopsOn()) {
       const s = situation.current;
       if (!s || describePlaying() || speechBusy.current) {
         await sleep(100);
         continue;
       }
       const changed = s.key !== lastKey;
-      const remindAfter = s.key.startsWith('far') ? GUIDE_REMIND_MS : GUIDE_REMIND_CLOSE_MS;
+      const remindAfter = findOnRef.current
+        ? FIND_REMIND_MS
+        : s.key.startsWith('far')
+          ? GUIDE_REMIND_MS
+          : GUIDE_REMIND_CLOSE_MS;
       const remind = s.key !== OPEN.key && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
         await sleep(100);
@@ -777,7 +898,7 @@ export default function App() {
       cameraBusy.current = true;
       let photo;
       try {
-        photo = await cameraRef.current?.takePictureAsync({ quality: 0.5, shutterSound: !guideOnRef.current });
+        photo = await cameraRef.current?.takePictureAsync({ quality: 0.5, shutterSound: !loopsOn() });
       } finally {
         cameraBusy.current = false;
       }
@@ -816,10 +937,10 @@ export default function App() {
   }
 
   const busy = status === 'thinking' || status === 'capturing';
-  const found = !guideOn && resultVisible && result != null && !result.clear ? result : null;
-  const distance = guideOn ? guideDistance : (found?.distance_m ?? null);
+  const found = !guideOn && !findOn && resultVisible && result != null && !result.clear ? result : null;
+  const distance = findOn ? (findInfo?.distance_m ?? null) : guideOn ? guideDistance : (found?.distance_m ?? null);
   const showNumber = !busy && status !== 'error' && distance != null;
-  const direction = guideOn ? guideSide : (found?.direction ?? null);
+  const direction = findOn ? (findInfo?.direction ?? null) : guideOn ? guideSide : (found?.direction ?? null);
 
   const headline = busy
     ? 'Checking…'
@@ -827,9 +948,11 @@ export default function App() {
       ? 'No connection'
       : showNumber && distance != null
         ? `${distance.toFixed(1)} m`
-        : guideOn || (resultVisible && result?.clear)
-          ? 'Path clear'
-          : 'Ready';
+        : findOn
+          ? capitalize(findTarget ?? 'Find')
+          : guideOn || (resultVisible && result?.clear)
+            ? 'Path clear'
+            : 'Ready';
   const detail = busy
     ? 'Hold still'
     : status === 'error'
@@ -838,17 +961,20 @@ export default function App() {
         ? [direction && DIRECTION_WORD[direction], !guideOn && found?.height ? `${found.height} height` : null]
             .filter(Boolean)
             .join(' · ')
-        : guideOn
-          ? guideText || 'The voice tells you what changes'
-          : resultVisible && result?.clear
+        : findOn
+          ? findInfo?.sentence ?? 'Turn slowly'
+          : guideOn
+            ? guideText || 'The voice tells you what changes'
+            : resultVisible && result?.clear
             ? 'Nothing in your path'
             : 'Tap anywhere to describe';
-  const label = found?.label ? capitalize(found.label) : null;
+  const label = findOn ? capitalize(findTarget ?? '') : found?.label ? capitalize(found.label) : null;
 
-  // Where the obstacle box lands on screen: the 3:4 photo is scaled to cover the screen.
+  // Where the obstacle (or find target) box lands on screen: the 3:4 photo is scaled to cover the screen.
   let box: { left: number; top: number; width: number; height: number } | null = null;
-  if (found?.box && !busy) {
-    const [x, y, w, h] = found.box;
+  const shownBox = findOn ? (findInfo?.box ?? null) : found?.box;
+  if (shownBox && !busy) {
+    const [x, y, w, h] = shownBox;
     const scale = Math.max(screenW / PHOTO_ASPECT, screenH); // displayed photo height
     const photoW = scale * PHOTO_ASPECT;
     const offX = (screenW - photoW) / 2;
@@ -883,19 +1009,65 @@ export default function App() {
   );
 
   const guideButton = (
-    <Pressable
-      style={[styles.guide, guideOn ? styles.guideOn : styles.guideOff, !cameraPicture && styles.guideLarge]}
-      onPress={toggleGuide}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: guideOn }}
-      accessibilityLabel="Guide"
-      accessibilityHint="A voice tells you about obstacles while you walk. Walk slowly while it's on."
-    >
-      <Text style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}>
-        {guideOn ? 'Guide on' : 'Guide off'}
-      </Text>
-    </Pressable>
+    <View style={styles.buttons}>
+      <Pressable
+        style={[styles.guide, guideOn ? styles.guideOn : styles.guideOff, !cameraPicture && styles.guideLarge]}
+        onPress={toggleGuide}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: guideOn }}
+        accessibilityLabel="Guide"
+        accessibilityHint="A voice tells you about obstacles while you walk. Walk slowly while it's on."
+      >
+        <Text style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}>
+          {guideOn ? 'Guide on' : 'Guide'}
+        </Text>
+      </Pressable>
+      <Pressable
+        style={[styles.guide, findOn ? styles.guideOn : styles.guideOff, !cameraPicture && styles.guideLarge]}
+        onPress={openTargets}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: findOn }}
+        accessibilityLabel={findOn ? `Finding ${findTarget}` : 'Find'}
+        accessibilityHint={findOn ? 'Double tap to stop finding' : 'Pick an object and the voice tells you where it is'}
+      >
+        <Text style={[styles.guideText, findOn ? styles.guideTextOn : styles.guideTextOff]} numberOfLines={1}>
+          {findOn ? `Finding ${findTarget}` : 'Find'}
+        </Text>
+      </Pressable>
+    </View>
   );
+
+  const targetPicker = showTargets ? (
+    <View style={styles.picker} accessibilityViewIsModal>
+      <Text style={styles.pickerTitle} accessibilityRole="header">
+        Find what?
+      </Text>
+      <View style={styles.pickerList}>
+        {targets.length === 0 ? <Text style={styles.pickerHint}>Loading the list…</Text> : null}
+        {targets.map((t) => (
+          <Pressable
+            key={t}
+            style={styles.pickerItem}
+            onPress={() => startFind(t)}
+            accessibilityRole="button"
+            accessibilityLabel={t}
+            accessibilityHint={`Starts finding the nearest ${t}`}
+          >
+            <Text style={styles.pickerItemText}>{capitalize(t)}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Pressable
+        style={styles.pickerCancel}
+        onPress={() => setShowTargets(false)}
+        accessibilityRole="button"
+        accessibilityLabel="Cancel"
+        accessibilityHint="Closes the list"
+      >
+        <Text style={styles.pickerCancelText}>Cancel</Text>
+      </Pressable>
+    </View>
+  ) : null;
 
   return (
     <View
@@ -938,7 +1110,7 @@ export default function App() {
                 <View style={[styles.tag, { left: box.left, top: Math.max(110, box.top - 48) }]}>
                   <Text style={styles.tagText}>
                     {label ?? 'Obstacle'}
-                    {found?.distance_m != null ? ` · ${found.distance_m.toFixed(1)} m` : ''}
+                    {distance != null ? ` · ${distance.toFixed(1)} m` : ''}
                   </Text>
                 </View>
               </>
@@ -991,6 +1163,7 @@ export default function App() {
         </>
       )}
 
+      {targetPicker}
       {showSettings ? (
         <Settings
           mode={mode}
@@ -1074,7 +1247,30 @@ const styles = StyleSheet.create({
   headline: { color: C.blue, fontSize: 34, ...font('bold') },
   headlineNumber: { fontSize: 56, ...font('heavy') },
   detail: { color: C.ink2, fontSize: 18, marginTop: 2, ...font('semibold') },
-  guide: { minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center' },
+  buttons: { flexDirection: 'row', gap: 12 },
+  guide: { flex: 1, minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  picker: { ...StyleSheet.absoluteFill, backgroundColor: C.bg, padding: 20, paddingTop: 70 },
+  pickerTitle: { color: C.ink, fontSize: 34, marginBottom: 12, ...font('heavy') },
+  pickerHint: { color: C.ink2, fontSize: 20, ...font('regular') },
+  pickerList: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignContent: 'flex-start' },
+  pickerItem: {
+    minHeight: 64,
+    paddingHorizontal: 22,
+    borderRadius: 32,
+    backgroundColor: C.blue,
+    justifyContent: 'center',
+  },
+  pickerItemText: { color: '#fff', fontSize: 22, ...font('bold') },
+  pickerCancel: {
+    minHeight: 72,
+    borderRadius: 36,
+    borderWidth: 3,
+    borderColor: C.blue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  pickerCancelText: { color: C.blue, fontSize: 24, ...font('bold') },
   guideLarge: { minHeight: 96, borderRadius: 48 },
   guideOn: { backgroundColor: C.blue },
   guideOff: { backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 2, borderColor: C.blue },
