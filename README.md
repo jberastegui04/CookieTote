@@ -74,12 +74,15 @@ Fast result for guide mode (the endpoint keeps its old name). Depth only, no det
 
 ### POST /find
 
-Find mode: where a chosen object is, plus the usual obstacle reading from the same frame. Form upload: `image` (about 512 px wide, like guide frames), `mode`, and `target` (one of `GET /find/targets`).
+Find mode: where a chosen object is, plus the usual obstacle reading from the same frame. Form upload: `image` (about 512 px wide, like guide frames), `mode`, and `target` (one of `GET /find/targets`) and/or `description` (free text up to 60 characters, like "red bench" or "person in a dark hoodie"). A description can name the target itself ("the red sofa" finds a couch); `target` is only required when it doesn't. With a description, every candidate of that object is scored against the words (SigLIP), and the best match wins. The sentence then says "Found it", "Possible match", or "No match yet", never the user's own words, so the cloned voice can't be made to say arbitrary text.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `found` | boolean | true if the target is in the frame |
-| `target` | string | the target asked for |
+| `target` | string | the object looked for (from `target`, or named in `description`) |
+| `description` | string or null | the description, if one was sent |
+| `match` | string or null | with a description: `yes` (score at least 0.1), `possible` (0.01 to 0.1), or `no`; null without one |
+| `match_score` | number or null | the best candidate's score against the description, 0 to 1 |
 | `direction` | string or null | `left`, `ahead` (within 8° of center), or `right` |
 | `bearing_deg` | number or null | degrees off center, right is positive, about -26 to 26; drives the centering haptic |
 | `distance_m` | number or null | distance to the target, rounded to 0.5 |

@@ -7,4 +7,7 @@ python-dotenv
 torch
 transformers
 timm
+# SigLIP's tokenizer, for Find descriptions ("red bench")
+sentencepiece
+protobuf
 requests

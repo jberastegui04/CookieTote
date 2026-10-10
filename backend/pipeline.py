@@ -3,8 +3,12 @@
 Both functions take a PIL image and a mode ("indoor" or "outdoor") and return a dict.
 main.py adds audio_b64 to the describe() result, so don't add it here.
 """
+import threading
+
 import numpy as np
+import torch
 from PIL import Image
+from transformers import AutoModel, AutoProcessor
 from transformers import pipeline as hf_pipeline
 
 # Warn further out outdoors since people walk faster.
@@ -236,6 +240,55 @@ CAMERA_HALF_FOV_DEG = 26
 FIND_AHEAD_DEG = 8  # within this of center, say "ahead"
 FIND_CENTERED_DEG = 5  # within this, you're facing it
 FIND_MAX_SPOKEN_M = 10
+# Words people say for the targets, so a description like "the red sofa" still finds a couch.
+FIND_SYNONYMS = {
+    "sofa": "couch", "fridge": "refrigerator", "bag": "backpack", "mug": "cup", "computer": "laptop",
+    "desk": "table", "man": "person", "woman": "person", "guy": "person", "girl": "person", "boy": "person",
+    "someone": "person", "people": "person", "kid": "person", "child": "person", "seat": "chair",
+}
+
+# Describe-and-match: DETR finds every candidate of the noun, then SigLIP scores each crop against the
+# user's words ("red bench", "person in a dark hoodie"). SigLIP scores each pair on its own (0..1), so
+# the score also says whether anything matches at all. Fit on venue photos: right pick on all 7 tests;
+# a clear match scored 0.2-0.99, a wrong color or absent person 0.001-0.013.
+MATCH_MODEL = "google/siglip-base-patch16-224"
+MATCH_YES = 0.1
+MATCH_POSSIBLE = 0.01
+MATCH_MAX_CANDIDATES = 5  # biggest first; scoring every chair in a full room took 2 s
+DESCRIPTION_MAX_CHARS = 60
+_match = {}
+_match_lock = threading.Lock()
+
+
+def _match_model():
+    """Loaded on first use, so the server starts as fast as before."""
+    with _match_lock:
+        if not _match:
+            _match["processor"] = AutoProcessor.from_pretrained(MATCH_MODEL)
+            _match["model"] = AutoModel.from_pretrained(MATCH_MODEL).eval()
+    return _match["processor"], _match["model"]
+
+
+def target_from(target: str | None, description: str | None) -> str | None:
+    """The FIND_TARGETS name to look for: the picked target, else the first one named in the description."""
+    if target:
+        return target if target in FIND_TARGETS else None
+    for word in (description or "").lower().replace(",", " ").split():
+        word = word.strip(".!?'\"")
+        word = FIND_SYNONYMS.get(word, word)
+        if word in FIND_TARGETS:
+            return word
+        if word.endswith("s") and word[:-1] in FIND_TARGETS:  # "chairs"
+            return word[:-1]
+    return None
+
+
+def _match_scores(crops: list[Image.Image], description: str) -> list[float]:
+    processor, model = _match_model()
+    inputs = processor(text=[f"a photo of a {description}"], images=crops, padding="max_length", return_tensors="pt")
+    with torch.inference_mode():
+        logits = model(**inputs).logits_per_image[:, 0]
+    return torch.sigmoid(logits).tolist()
 
 
 def _find_how_far(distance: float) -> str:
@@ -248,35 +301,54 @@ def _find_how_far(distance: float) -> str:
     return f"about {meters:g} {'meter' if meters == 1 else 'meters'}"
 
 
-def find_sentence(target: str, direction: str | None, distance: float | None) -> str:
+def find_sentence(target: str, direction: str | None, distance: float | None, match: str | None = None) -> str:
+    """With a description, the sentence never repeats the user's words ("Found it", not "Red bench"),
+    so every possible sentence can be on the /say allowlist and a cloned voice can't be made to say
+    arbitrary text."""
     if direction is None or distance is None:
-        return f"No {target} yet. Turn slowly."
+        return "No match yet. Turn slowly." if match else f"No {target} yet. Turn slowly."
     where = {"left": "slightly left", "right": "slightly right"}.get(direction, "ahead")
-    return f"{target.capitalize()}, {where}, {_find_how_far(distance)}."
+    name = {"yes": "Found it", "possible": "Possible match"}.get(match or "", target.capitalize())
+    return f"{name}, {where}, {_find_how_far(distance)}."
 
 
 def find_phrases() -> set[str]:
     """Every sentence find() can return, for the /say allowlist."""
     distances = [0.5, 1, 1.5, 2, 2.5, 3] + list(range(4, FIND_MAX_SPOKEN_M + 1)) + [FIND_MAX_SPOKEN_M + 1]
-    phrases = set()
+    phrases = {find_sentence("", None, None, "no")}
     for target in FIND_TARGETS:
         phrases.add(find_sentence(target, None, None))
         for direction in ("left", "ahead", "right"):
             phrases |= {find_sentence(target, direction, d) for d in distances}
+    for match in ("yes", "possible"):
+        for direction in ("left", "ahead", "right"):
+            phrases |= {find_sentence("", direction, d, match) for d in distances}
     return phrases
 
 
-def find(image: Image.Image, mode: str, target: str) -> dict:
-    """Where the target is (bearing and distance), plus the usual obstacle reading from the same depth map."""
+def find(image: Image.Image, mode: str, target: str, description: str | None = None) -> dict:
+    """Where the target is (bearing and distance), plus the usual obstacle reading from the same depth map.
+    With a description, the candidate that best matches it wins, and only if it matches well enough."""
     depth = depth_map(image, mode)
     w, h = image.size
     wanted = FIND_TARGETS[target]
     hits = [d for d in _detector(image, threshold=DETECT_THRESHOLD) if d["label"] == wanted]
-    result = {"found": False, "target": target, "direction": None, "bearing_deg": None,
-              "distance_m": None, "centered": False, "box": None}
+    # The biggest one is usually the nearest.
+    hits.sort(key=lambda d: -(d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))
+    result = {"found": False, "target": target, "description": description, "match": None, "match_score": None,
+              "direction": None, "bearing_deg": None, "distance_m": None, "centered": False, "box": None}
+    if hits and description:
+        hits = hits[:MATCH_MAX_CANDIDATES]
+        scores = _match_scores([image.crop((d["box"]["xmin"], d["box"]["ymin"], d["box"]["xmax"], d["box"]["ymax"])) for d in hits], description)
+        best = max(range(len(hits)), key=lambda i: scores[i])
+        score = scores[best]
+        result["match_score"] = round(score, 3)
+        result["match"] = "yes" if score >= MATCH_YES else "possible" if score >= MATCH_POSSIBLE else "no"
+        hits = [hits[best]] if result["match"] != "no" else []
+    elif description:
+        result["match"] = "no"
     if hits:
-        # The biggest one is usually the nearest.
-        b = max(hits, key=lambda d: (d["box"]["xmax"] - d["box"]["xmin"]) * (d["box"]["ymax"] - d["box"]["ymin"]))["box"]
+        b = hits[0]["box"]
         x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
         bearing = ((x0 + x1) / 2 - 0.5) * 2 * CAMERA_HALF_FOV_DEG  # right is positive
         # Distance from the middle of the box, so floor and background at its edges don't count.
@@ -292,7 +364,7 @@ def find(image: Image.Image, mode: str, target: str) -> dict:
             box=[round(v, 3) for v in (x0, y0, x1 - x0, y1 - y0)],
         )
         result["_distance"] = distance
-    result["sentence"] = find_sentence(target, result["direction"], result.pop("_distance", None))
+    result["sentence"] = find_sentence(target, result["direction"], result.pop("_distance", None), result["match"])
     result["obstacle"] = _sonar_result(depth, mode)
     return result
 

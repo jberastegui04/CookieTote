@@ -92,11 +92,18 @@ def find_targets():
 
 
 @app.post("/find")
-async def find(image: UploadFile = File(...), mode: str = Form("indoor"), target: str = Form(...)):
-    target = target.strip().lower()
-    if target not in pipeline.FIND_TARGETS:
-        raise HTTPException(400, f"target must be one of: {', '.join(pipeline.FIND_TARGETS)}")
-    return await run_in_threadpool(pipeline.find, await read_image(image, mode), mode, target)
+async def find(
+    image: UploadFile = File(...),
+    mode: str = Form("indoor"),
+    target: str | None = Form(None),
+    description: str | None = Form(None),
+):
+    """target from the picker, and/or a description like "red bench" (which can name the target itself)."""
+    description = (description or "").strip()[: pipeline.DESCRIPTION_MAX_CHARS] or None
+    target = pipeline.target_from((target or "").strip().lower() or None, description)
+    if target is None:
+        raise HTTPException(400, f"name one of: {', '.join(pipeline.FIND_TARGETS)}")
+    return await run_in_threadpool(pipeline.find, await read_image(image, mode), mode, target, description)
 
 
 @app.get("/voices")

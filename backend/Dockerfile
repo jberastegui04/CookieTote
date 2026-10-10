@@ -17,7 +17,9 @@ RUN pip install --no-cache-dir --user torch torchvision --index-url https://down
 RUN python -c "from transformers import pipeline; \
 pipeline('depth-estimation', model='depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf'); \
 pipeline('depth-estimation', model='depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf'); \
-pipeline('object-detection', model='facebook/detr-resnet-50')"
+pipeline('object-detection', model='facebook/detr-resnet-50'); \
+from transformers import AutoModel, AutoProcessor; \
+AutoProcessor.from_pretrained('google/siglip-base-patch16-224'); AutoModel.from_pretrained('google/siglip-base-patch16-224')"
 
 COPY --chown=user . .
 CMD ["python", "main.py"]

@@ -25,7 +25,7 @@ Both endpoints: POST multipart with `image` (photo) and `mode` ("indoor" | "outd
 
 Both `/describe` and `/sonar` include `open` ("left" | "right" | null): a side column with nothing inside the warning distance. Sentences end with "More room on the left" when set (never "clear"). `GET /say?text=&voice_id=` returns a WAV of a guide or find phrase; it only accepts the app's own phrases (`GUIDE_PHRASES` in `backend/main.py`), so new spoken wording must be added there.
 
-`POST /find` (Find mode) takes `image`, `mode`, `target` (from `GET /find/targets`) and returns `found`, `target`, `direction`, `bearing_deg` (right positive), `distance_m`, `centered`, `box`, `sentence`, and `obstacle` (the `/sonar` fields; its "Stop" wins over Find). Stage 1 targets are the COCO objects in `pipeline.FIND_TARGETS`.
+`POST /find` (Find mode) takes `image`, `mode`, `target` (from `GET /find/targets`) and/or `description` (free text like "red bench"; it can name the target itself) and returns `found`, `target`, `description`, `match` ("yes" | "possible" | "no" | null), `match_score`, `direction`, `bearing_deg` (right positive), `distance_m`, `centered`, `box`, `sentence`, and `obstacle` (the `/sonar` fields; its "Stop" wins over Find). Stage 1 targets are the COCO objects in `pipeline.FIND_TARGETS`.
 
 `GET /voices` returns `default` (id) and `voices` ([{id, name}], cloned first). `GET /voices/{id}/sample.wav` returns a sample WAV. `POST /voices/clone` (form: `audio`, `consent=true`) makes one ElevenLabs instant clone, "Trusted voice", replacing the previous one; needs a paid ElevenLabs plan. Voice clips are cached by (voice_id, sentence).
 
