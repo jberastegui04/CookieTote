@@ -461,9 +461,9 @@ export default function App() {
   if (!permission.granted) {
     return (
       <View style={[styles.screen, styles.center]}>
-        <StatusBar style="dark" />
+        <StatusBar style="light" />
         <Text style={styles.title}>Camera access needed</Text>
-        <Text style={styles.body}>The camera looks ahead to find obstacles in your path.</Text>
+        <Text style={styles.body}>To find things and see what is ahead.</Text>
         <Pressable
           style={styles.button}
           onPress={() => {
@@ -1594,10 +1594,10 @@ export default function App() {
           : arrived
             ? `Reach forward for the ${arrived}`
             : guideOn
-            ? guideText || 'The voice tells you what changes'
+            ? guideText || null
             : resultVisible && result?.clear
-            ? 'Nothing in your path'
-            : 'Tap anywhere to describe';
+            ? null
+            : 'Tap anywhere';
   const label = findOn ? capitalize(findTarget ?? '') : found?.label ? capitalize(found.label) : null;
 
   // Where the obstacle (or find target) box lands on screen: the 3:4 photo is scaled to cover the screen.
@@ -1613,7 +1613,7 @@ export default function App() {
   }
 
   const sceneName = scene === 'outdoor' ? 'Outdoor' : 'Indoor';
-  const whereText = mode === 'auto' ? (scene ? `${sceneName} · Auto` : 'Auto') : mode === 'indoor' ? 'Indoor' : 'Outdoor';
+  const whereText = mode === 'auto' ? (scene ? sceneName : 'Auto') : mode === 'indoor' ? 'Indoor' : 'Outdoor';
   const whereLabel =
     mode === 'auto' ? (scene ? `${sceneName}, detected automatically` : 'Indoor or outdoor, detected automatically') : whereText;
 
@@ -1679,24 +1679,24 @@ export default function App() {
   const findButton = (
     <View style={styles.modeCell}>
       <Pressable
-        style={({ pressed }) => [styles.guide, styles.guideOff, !cameraPicture && styles.guideLarge, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.guide, styles.guideOn, !cameraPicture && styles.guideLarge, pressed && styles.pressed]}
         onPress={openFindPicker}
         accessibilityRole="button"
         accessibilityLabel="Find"
         accessibilityHint="Pick something to find, like a chair. A voice tells you which way to turn."
       >
-        <Text style={[styles.guideText, styles.guideTextOff]} numberOfLines={1} adjustsFontSizeToFit>
+        <Text style={[styles.guideText, styles.guideTextOn]} numberOfLines={1} adjustsFontSizeToFit>
           Find
         </Text>
       </Pressable>
     </View>
   );
 
-  // Guide and Find side by side, the two things you start while walking.
+  // Find and Guide side by side; Find is the main feature, so it comes first and is filled, the two things you start while walking.
   const modeButtons = (
     <View style={styles.modeRow}>
-      {guideButton}
       {findButton}
+      {guideButton}
     </View>
   );
 
@@ -1708,7 +1708,7 @@ export default function App() {
         if (e.nativeEvent.actionName === 'magicTap') repeatLast();
       }}
     >
-      <StatusBar style={cameraPicture || showSettings || showTargets || findOn ? 'light' : 'dark'} />
+      <StatusBar style="light" />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
       {/* Camera picture off: cover the preview. The camera still runs underneath. */}
       {!cameraPicture ? <View style={styles.cover} pointerEvents="none" /> : null}
@@ -1846,14 +1846,14 @@ const styles = StyleSheet.create({
   title: { color: C.ink, fontSize: 30, textAlign: 'center', ...font('heavy') },
   body: { color: C.ink2, fontSize: 20, textAlign: 'center', lineHeight: 28, ...font('regular') },
   button: {
-    backgroundColor: C.blue,
+    backgroundColor: C.accent,
     minHeight: 80,
     alignSelf: 'stretch',
     borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buttonText: { color: '#fff', fontSize: 26, ...font('bold') },
+  buttonText: { color: C.onAccent, fontSize: 26, ...font('bold') },
   cover: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
   topShade: { position: 'absolute', top: 0, left: 0, right: 0, height: 180 },
   bottomShade: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 320 },
@@ -1870,35 +1870,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderRadius: 24,
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.92)',
+    backgroundColor: C.glass,
   },
   chipLarge: { backgroundColor: C.card, borderColor: C.border, borderWidth: 1.5 },
   chipText: { color: C.ink, fontSize: 18, ...font('semibold') },
-  box: { position: 'absolute', borderWidth: 5, borderColor: C.bright, borderRadius: 18, backgroundColor: 'rgba(61,139,255,0.08)' },
+  box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18, backgroundColor: 'rgba(255,214,10,0.08)' },
   // Soft glow around the outline, like the Figma (iOS draws it from the shadow).
   glow: {
     position: 'absolute',
     borderWidth: 10,
-    borderColor: 'rgba(61,139,255,0.45)',
+    borderColor: 'rgba(255,214,10,0.4)',
     borderRadius: 22,
     margin: -5,
-    shadowColor: C.bright,
+    shadowColor: C.accent,
     shadowOpacity: 1,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 0 },
   },
   tag: {
     position: 'absolute',
-    backgroundColor: '#fff',
+    backgroundColor: C.accent,
     borderRadius: 12,
     paddingHorizontal: 14,
     minHeight: 40,
     justifyContent: 'center',
   },
-  tagText: { color: C.blue, fontSize: 20, ...font('bold') },
+  tagText: { color: C.onAccent, fontSize: 20, ...font('bold') },
   bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm, gap: SPACE.md },
   card: {
-    backgroundColor: 'rgba(255,255,255,0.94)',
+    backgroundColor: C.glass,
     borderRadius: 22,
     paddingHorizontal: GUTTER,
     paddingVertical: SPACE.lg,
@@ -1911,10 +1911,10 @@ const styles = StyleSheet.create({
     left: -8,
     right: -8,
     borderRadius: 46,
-    backgroundColor: C.bright,
+    backgroundColor: C.accent,
   },
   haloLarge: { borderRadius: 56 },
-  headline: { color: C.blue, fontSize: 34, ...font('bold') },
+  headline: { color: C.accent, fontSize: 34, ...font('bold') },
   headlineNumber: { fontSize: 56, ...font('heavy') },
   detail: { color: C.ink2, fontSize: 18, marginTop: SPACE.xs, ...font('semibold') },
   // Fixed height (not minHeight) so Guide and Find always match, whatever the label says.
@@ -1922,11 +1922,11 @@ const styles = StyleSheet.create({
   guideLarge: { height: 96, borderRadius: 48 },
   modeRow: { flexDirection: 'row', gap: SPACE.md },
   modeCell: { flex: 1 },
-  guideOn: { backgroundColor: C.blue },
-  guideOff: { backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 2, borderColor: C.blue },
+  guideOn: { backgroundColor: C.accent },
+  guideOff: { backgroundColor: C.glass, borderWidth: 2, borderColor: C.accent },
   guideText: { fontSize: 26, ...font('bold') },
-  guideTextOn: { color: '#fff' },
-  guideTextOff: { color: C.blue },
+  guideTextOn: { color: C.onAccent },
+  guideTextOff: { color: C.accent },
   // Below the top chips (48 tall), above the home indicator.
   large: {
     ...StyleSheet.absoluteFill,
@@ -1936,7 +1936,7 @@ const styles = StyleSheet.create({
   },
   largeMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: SPACE.sm },
   largeLabel: { color: C.ink, fontSize: 34, ...font('bold') },
-  largeHeadline: { color: C.blue, fontSize: 56, textAlign: 'center', ...font('heavy') },
+  largeHeadline: { color: C.accent, fontSize: 56, textAlign: 'center', ...font('heavy') },
   largeNumber: { fontSize: 120 },
   largeDetail: { color: C.ink, fontSize: 30, textAlign: 'center', ...font('bold') },
   arrow: { color: C.ink, fontSize: 96, marginTop: 8, ...font('heavy') },

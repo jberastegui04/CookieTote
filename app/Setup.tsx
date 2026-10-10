@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Caption, Header, Tap, VoiceList } from './controls';
+import { Header, Tap, VoiceList } from './controls';
 import { useReduceMotion } from './motion';
 import Logo from './Logo';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
@@ -53,24 +53,22 @@ export default function Setup(p: Props) {
               <Text style={styles.appName} accessibilityRole="header">
                 WatchIt
               </Text>
-              <Text style={styles.tagline}>Hear what's in your path.</Text>
+              <Text style={styles.tagline}>Find things. Avoid obstacles.</Text>
             </View>
             <View style={styles.body}>
               {[
-                ['Tap anywhere', "Hear what's ahead and how far."],
-                ['Turn on Guide', 'A voice tells you what is ahead as you walk.'],
-                ['Press and hold anywhere', 'Repeats the last warning.'],
+                ['Find', 'Say what you need. A voice leads you to it.'],
+                ['Guide', 'Warns you about what is ahead.'],
+                ['Tap anywhere', 'Hear what is in front of you.'],
+                ['Press and hold', 'Repeat the last warning.'],
               ].map(([t, b]) => (
                 <View key={t} style={styles.howTo} accessible>
-                  <View style={styles.accent} />
-                  <View style={styles.howToText}>
-                    <Text style={styles.howToTitle}>{t}</Text>
-                    <Text style={styles.howToBody}>{b}</Text>
-                  </View>
+                  <Text style={styles.howToTitle}>{t}</Text>
+                  <Text style={styles.howToBody}>{b}</Text>
                 </View>
               ))}
               <Text style={styles.footnote}>
-                Not a cane replacement. Does not detect curbs, drop-offs, or moving cars.
+                Not a cane. Does not detect curbs, drop-offs or moving cars.
               </Text>
             </View>
           </ScrollView>
@@ -101,7 +99,7 @@ export default function Setup(p: Props) {
     return (
       <View style={styles.screen}>
         <StatusBar style="light" />
-        {header('How much can you see?', 'Tap one. You can change it later in Settings.')}
+        {header('How much can you see?', 'You can change this later.')}
         <Animated.View style={fadeIn}>
           <ScrollView contentContainerStyle={styles.content}>
             {choices.map((c) => (
@@ -128,11 +126,10 @@ export default function Setup(p: Props) {
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
-      {header('Pick a voice', 'This voice reads warnings and guides you. Tap one to hear it.')}
+      {header('Pick a voice', 'Tap one to hear it.')}
       <Animated.View style={fadeIn}>
         <ScrollView contentContainerStyle={styles.content}>
           <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
-          <Caption>You can change the voice, haptics and more later in Settings.</Caption>
         </ScrollView>
         <View style={styles.footer}>
           <BigButton label="Finish" hint="Opens the camera" onPress={p.onFinish} />
@@ -155,26 +152,24 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: GUTTER, paddingTop: SPACE.xl, paddingBottom: SPACE.xl },
   footer: { paddingHorizontal: GUTTER, paddingTop: SPACE.md, paddingBottom: SAFE.bottom + SPACE.sm },
   welcome: { paddingBottom: SPACE.xl },
-  // Blue hero at the top of the welcome screen, running up under the status bar.
+  // Yellow hero at the top of the welcome screen, running up under the status bar.
   hero: {
-    backgroundColor: C.blue,
+    backgroundColor: C.accent,
     paddingTop: SAFE.top + SPACE.xxl,
     paddingBottom: SPACE.xxl,
     paddingHorizontal: GUTTER,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
   },
-  appName: { color: '#fff', fontSize: 48, marginTop: SPACE.xl, ...font('heavy') },
-  tagline: { color: '#fff', fontSize: 24, marginTop: SPACE.xs, ...font('regular') },
+  appName: { color: C.onAccent, fontSize: 48, marginTop: SPACE.xl, ...font('heavy') },
+  tagline: { color: C.onAccent, fontSize: 24, marginTop: SPACE.xs, ...font('regular') },
   body: { paddingHorizontal: GUTTER, paddingTop: SPACE.xxl },
-  howTo: { flexDirection: 'row', gap: SPACE.lg, marginBottom: SPACE.xl },
-  accent: { width: 6, borderRadius: 3, backgroundColor: C.blue },
-  howToText: { flex: 1 },
-  howToTitle: { color: C.ink, fontSize: 23, ...font('bold') },
+  howTo: { marginBottom: SPACE.xl },
+  howToTitle: { color: C.accent, fontSize: 24, ...font('bold') },
   howToBody: { color: C.ink2, fontSize: 19, marginTop: SPACE.xs, ...font('regular') },
   footnote: { color: C.ink2, fontSize: 17, lineHeight: 24, marginTop: SPACE.sm, ...font('regular') },
   choice: {
-    backgroundColor: C.blue,
+    backgroundColor: C.accent,
     borderRadius: 24,
     minHeight: 128,
     alignItems: 'center',
@@ -182,7 +177,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: GUTTER,
     marginBottom: SPACE.lg,
   },
-  choiceText: { color: '#fff', fontSize: 28, textAlign: 'center', ...font('bold') },
-  big: { backgroundColor: C.blue, minHeight: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
-  bigText: { color: '#fff', fontSize: 28, ...font('bold') },
+  choiceText: { color: C.onAccent, fontSize: 28, textAlign: 'center', ...font('bold') },
+  big: { backgroundColor: C.accent, minHeight: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
+  bigText: { color: C.onAccent, fontSize: 28, ...font('bold') },
 });

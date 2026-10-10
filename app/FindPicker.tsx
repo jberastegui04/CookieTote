@@ -46,7 +46,7 @@ export default function FindPicker(p: Props) {
     <View style={styles.screen} accessibilityViewIsModal>
       <Header
         title="Find something"
-        sub="Say it or type it. A voice tells you which way to turn."
+        sub="Say it or type it."
         onBack={p.onClose}
         backHint="Returns to the camera"
       />
@@ -58,7 +58,7 @@ export default function FindPicker(p: Props) {
           onPress={p.onSpeak}
           active={p.speakState !== 'idle'}
         />
-        <Caption>For example "find the red bench" or "where is the table".</Caption>
+        <Caption>Like "find the red bench".</Caption>
         <Section title="OR TYPE IT" />
         <TextInput
           style={[styles.input, focused && styles.inputFocused]}
@@ -100,23 +100,23 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 2,
     borderColor: C.ink2,
-    backgroundColor: C.bg,
+    backgroundColor: C.card,
     paddingHorizontal: GUTTER,
     color: C.ink,
     fontSize: 22,
     ...font('semibold'),
   },
-  inputFocused: { borderColor: C.blue, borderWidth: 3 },
+  inputFocused: { borderColor: C.accent, borderWidth: 3 },
   findIt: {
     minHeight: 72,
     borderRadius: 36,
-    backgroundColor: C.blue,
+    backgroundColor: C.accent,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: SPACE.md,
   },
   // Disabled until something is typed: outlined instead of filled, still readable.
   findItOff: { backgroundColor: C.bg, borderWidth: 2, borderColor: C.border },
-  findItText: { color: '#fff', fontSize: 24, ...font('bold') },
+  findItText: { color: C.onAccent, fontSize: 24, ...font('bold') },
   findItTextOff: { color: C.ink2 },
 });

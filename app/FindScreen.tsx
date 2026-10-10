@@ -72,7 +72,7 @@ export default function FindScreen(p: Props) {
             : 'Almost facing it';
   // With a description: how well what's in view fits it. Only while it's actually in the frame.
   const matchNote = p.description && found && r.box ? (r.match === 'yes' ? 'Looks like a match' : r.match === 'possible' ? 'Possible match' : null) : null;
-  const detail = !r ? 'Hold the phone up and turn slowly.' : !found ? 'Turn slowly.' : matchNote;
+  const detail = !found ? 'Turn slowly' : matchNote;
   const arrow = found && r.direction ? ARROW[r.direction] : null;
   const distance = found && r.distance_m != null ? `${formatDistance(r.distance_m, p.units)} away` : null;
 
@@ -175,15 +175,15 @@ const DOT = 32;
 const styles = StyleSheet.create({
   screen: { ...StyleSheet.absoluteFill },
   band: {
-    backgroundColor: C.blue,
+    backgroundColor: C.accent,
     paddingTop: SAFE.top + SPACE.lg,
     paddingBottom: SPACE.xl,
     paddingHorizontal: GUTTER,
     borderBottomLeftRadius: 28,
     borderBottomRightRadius: 28,
   },
-  bandLabel: { color: '#fff', fontSize: 18, letterSpacing: 1, ...font('bold') },
-  bandTarget: { color: '#fff', fontSize: 40, marginTop: SPACE.xs, ...font('heavy') },
+  bandLabel: { color: C.onAccent, fontSize: 18, letterSpacing: 1, ...font('bold') },
+  bandTarget: { color: C.onAccent, fontSize: 40, marginTop: SPACE.xs, ...font('heavy') },
   // The card sits just above the Stop button.
   middle: {
     position: 'absolute',
@@ -193,21 +193,21 @@ const styles = StyleSheet.create({
   },
   middleLarge: { top: SAFE.top + 160, justifyContent: 'center' },
   card: {
-    backgroundColor: 'rgba(255,255,255,0.94)',
+    backgroundColor: C.glass,
     borderRadius: 22,
     paddingHorizontal: GUTTER,
     paddingVertical: SPACE.lg,
   },
   cardLarge: { backgroundColor: C.card, paddingVertical: SPACE.xxl },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
-  arrow: { color: C.blue, fontSize: 48, ...font('heavy') },
+  arrow: { color: C.accent, fontSize: 48, ...font('heavy') },
   arrowLarge: { fontSize: 80 },
   headline: { color: C.ink, fontSize: 30, flexShrink: 1, ...font('heavy') },
   headlineLarge: { fontSize: 40 },
   detail: { color: C.ink2, fontSize: 19, marginTop: SPACE.xs, ...font('semibold') },
   meter: { height: DOT, marginTop: SPACE.lg, marginHorizontal: DOT / 2, justifyContent: 'center' },
-  track: { height: 10, borderRadius: 5, backgroundColor: '#D1D1D6' },
-  trackOn: { backgroundColor: C.blue },
+  track: { height: 10, borderRadius: 5, backgroundColor: C.border },
+  trackOn: { backgroundColor: C.accent },
   centerMark: {
     position: 'absolute',
     left: '50%',
@@ -223,36 +223,36 @@ const styles = StyleSheet.create({
     width: DOT,
     height: DOT,
     borderRadius: DOT / 2,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
     borderWidth: 4,
-    borderColor: C.blue,
+    borderColor: C.accent,
   },
-  dotOn: { backgroundColor: C.blue, borderColor: '#fff' },
-  distance: { color: C.blue, fontSize: 40, marginTop: SPACE.md, ...font('heavy') },
+  dotOn: { backgroundColor: C.accent, borderColor: C.onAccent },
+  distance: { color: C.accent, fontSize: 40, marginTop: SPACE.md, ...font('heavy') },
   distanceLarge: { fontSize: 64 },
   bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm },
-  stop: { minHeight: 80, borderRadius: 40, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center' },
+  stop: { minHeight: 80, borderRadius: 40, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
   stopLarge: { minHeight: 96, borderRadius: 48 },
-  stopText: { color: '#fff', fontSize: 26, ...font('bold') },
-  box: { position: 'absolute', borderWidth: 5, borderColor: C.bright, borderRadius: 18 },
+  stopText: { color: C.onAccent, fontSize: 26, ...font('bold') },
+  box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },
   glow: {
     position: 'absolute',
     borderWidth: 10,
-    borderColor: 'rgba(61,139,255,0.45)',
+    borderColor: 'rgba(255,214,10,0.4)',
     borderRadius: 22,
     margin: -5,
-    shadowColor: C.bright,
+    shadowColor: C.accent,
     shadowOpacity: 1,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 0 },
   },
   tag: {
     position: 'absolute',
-    backgroundColor: '#fff',
+    backgroundColor: C.accent,
     borderRadius: 12,
     paddingHorizontal: 14,
     minHeight: 40,
     justifyContent: 'center',
   },
-  tagText: { color: C.blue, fontSize: 20, ...font('bold') },
+  tagText: { color: C.onAccent, fontSize: 20, ...font('bold') },
 });

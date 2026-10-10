@@ -12,17 +12,19 @@ export const SAFE = {
 export const SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 };
 export const GUTTER = 20; // left and right margin on every screen
 
-// Colors from the Figma file. Every text/background pair here is at least 7:1.
+// Yellow on near-black: the classic low-vision high-contrast pair. Dark cuts glare, yellow is the
+// color the eye finds first. Every text/background pair here is at least 7:1.
 export const C = {
-  blue: '#0047B3', // buttons, selected options, big numbers
-  bright: '#3D8BFF', // obstacle outline on the camera picture (dark blue disappears there)
-  ink: '#111111', // main text
-  ink2: '#3C3C43', // secondary text
-  bg: '#FFFFFF',
-  card: '#F2F2F7',
-  border: '#C7C7CC',
-  off: '#8E8E93', // switch track when off
-  tint: '#E6EEFA', // light blue fill behind a selected row (ink on it is 17:1)
+  accent: '#FFD60A', // buttons, selected options, big numbers, the outline on the camera
+  onAccent: '#0B0B0C', // text and icons on accent (14:1)
+  ink: '#FFFFFF', // main text (19:1 on bg)
+  ink2: '#C7C7CC', // secondary text (12:1 on bg, 10:1 on card)
+  bg: '#0B0B0C',
+  card: '#1C1C1E', // rows and inputs
+  glass: 'rgba(11,11,12,0.9)', // cards and chips over the camera picture
+  border: '#48484A',
+  off: '#636366', // switch track when off
+  tint: '#2E2809', // dark yellow fill behind a selected row (white on it is 15:1)
 };
 
 // Atkinson Hyperlegible Next, made for low vision readers. Loaded with useFonts in App.tsx;

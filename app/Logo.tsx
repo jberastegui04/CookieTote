@@ -2,11 +2,11 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { C } from './theme';
 
 // The WatchIt eye: a smooth almond with a round pupil and a small highlight, so it reads
-// friendly rather than staring. `inverse` draws it white, for blue backgrounds.
+// friendly rather than staring. `inverse` draws it dark, for yellow backgrounds.
 // Decorative only; VoiceOver skips it.
 export default function Logo({ width = 140, inverse = false }: { width?: number; inverse?: boolean }) {
-  const main = inverse ? '#fff' : C.blue;
-  const back = inverse ? C.blue : '#fff';
+  const main = inverse ? C.onAccent : C.accent;
+  const back = inverse ? C.accent : C.bg;
   return (
     <Svg
       width={width}

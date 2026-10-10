@@ -84,7 +84,7 @@ export default function Settings(p: Props) {
       <View style={styles.screen} accessibilityViewIsModal>
         <Header
           title={unnamed ? 'Name the new voice' : editing.name}
-          sub={unnamed ? 'Say it or type it, like "Mom".' : 'A trusted voice you recorded.'}
+          sub={unnamed ? 'Say it or type it.' : undefined}
           onBack={() => {
             setNaming(false);
             setPage('voice');
@@ -142,7 +142,7 @@ export default function Settings(p: Props) {
       <View style={styles.screen} accessibilityViewIsModal>
         <Header
           title="Voice"
-          sub="Reads warnings and guides you while you walk. Tap one to hear it."
+          sub="Tap one to hear it."
           onBack={() => setPage('main')}
           backHint="Returns to settings"
         />
@@ -169,7 +169,7 @@ export default function Settings(p: Props) {
             onPress={p.onClone}
             active={p.cloneStep === 'recording'}
           />
-          <Caption>Record family or friends who agreed to it. Up to five voices.</Caption>
+          <Caption>Only record people who agree. Up to five.</Caption>
         </ScrollView>
       </View>
     );
@@ -190,7 +190,6 @@ export default function Settings(p: Props) {
             { value: 'outdoor', label: 'Outdoor', hint: 'Warns at about 4 meters' },
           ]}
         />
-        <Caption>Auto works it out from the camera. Indoors it warns sooner than outdoors.</Caption>
 
         <Section title="DISTANCE" />
         <Segment
@@ -212,7 +211,6 @@ export default function Settings(p: Props) {
             { value: 'early', label: 'Early', hint: 'Warns sooner, so you have more time to stop' },
           ]}
         />
-        <Caption>Early gives you more time to stop. Close only warns about things nearby.</Caption>
 
         <Section title="SCREEN" />
         <ToggleRow
@@ -221,7 +219,6 @@ export default function Settings(p: Props) {
           value={p.cameraPicture}
           onChange={p.onCameraPicture}
         />
-        <Caption>Turn off to show only the big distance number.</Caption>
 
         <Section title="SOUND & TOUCH" />
         <ToggleRow
@@ -271,13 +268,13 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 2,
     borderColor: C.ink2,
-    backgroundColor: C.bg,
+    backgroundColor: C.card,
     paddingHorizontal: GUTTER,
     color: C.ink,
     fontSize: 22,
     ...font('semibold'),
   },
-  inputFocused: { borderColor: C.blue, borderWidth: 3 },
+  inputFocused: { borderColor: C.accent, borderWidth: 3 },
   delete: {
     minHeight: 72,
     borderRadius: 36,
