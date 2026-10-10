@@ -117,10 +117,10 @@ export default function FindScreen(p: Props) {
             {/* Searching: a thin dashed outline. Locked on: solid. One box, no glow. */}
             <Animated.View style={[styles.box, !r?.locked && styles.boxSearching, boxStyle]} />
             <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop, opacity: r?.stale ? 0.6 : 1 }]}>
-              {/* "Found", not the name: a described target ("person in a dark hoodie") is too long for a tag. */}
+              {/* Short words, not the name: a described target ("person in a dark hoodie") is too long for a
+                  tag. "Looking…" until the server locks on, then "Found". */}
               <Text style={styles.tagText}>
-                {r?.locked ? '● ' : ''}
-                Found
+                {r?.locked ? '● Found' : 'Looking…'}
                 {r?.distance_m != null ? ` · ${formatDistance(r.distance_m, p.units)}` : ''}
               </Text>
             </Animated.View>

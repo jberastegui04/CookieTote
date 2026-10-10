@@ -205,6 +205,9 @@ type Detour = { side: 'left' | 'right'; startedAt: number; clearFrames: number }
 const DETOUR_CLEAR_FRAMES = 2;
 const DETOUR_STUCK_MS = 8000; // still blocked after this long: say to back up, and start over
 const DETOUR_STUCK_PHRASE = 'Still blocked. Back up a step.';
+// Find also says when something is ahead further out (the server reports up to about 3.5 m while
+// finding): once per distance step, held this long so it gets spoken, then back to the target.
+const FIND_AHEAD_HOLD_MS = 2500;
 const detourPhrase = (obstacle: Side, step: 'left' | 'right', stop: boolean) =>
   stop
     ? `Stop. Step to your ${step}.`
@@ -384,6 +387,7 @@ export default function App() {
   const saidStandStill = useRef(false);
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const detourRef = useRef<Detour | null>(null); // stepping around something in Approach
+  const aheadWarned = useRef<{ key: string; at: number } | null>(null); // last "Something ahead, about 3 meters"
   const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
   // Lock-on: a short rising two-note chime (G5, D6) when the tracker locks onto the target.
@@ -965,6 +969,7 @@ export default function App() {
     movingSince.current = null;
     saidStandStill.current = false;
     detourRef.current = null;
+    aheadWarned.current = null;
     startHeading();
     frameLoop(
       () => findOnRef.current,
@@ -984,7 +989,9 @@ export default function App() {
       .then(() => fetchPhrase(detourPhrase('right', 'left', false)))
       .then(() => fetchPhrase(detourPhrase('left', 'right', false)))
       .then(() => fetchPhrase(detourClearPhrase('left')))
-      .then(() => fetchPhrase(detourClearPhrase('right')));
+      .then(() => fetchPhrase(detourClearPhrase('right')))
+      .then(() => fetchPhrase(classify(3, 'ahead', null, guideSettings()).text))
+      .then(() => fetchPhrase(classify(2, 'ahead', null, guideSettings()).text));
   }
 
   // Search -> Approach: facing the target. Said once, with a double pulse.
@@ -992,6 +999,7 @@ export default function App() {
     findPhaseRef.current = 'approach';
     centeredSince.current = null;
     detourRef.current = null;
+    aheadWarned.current = null;
     lastDriftAt.current = Date.now();
     interruptForStop({ key: 'handoff', text: HANDOFF_PHRASE, stop: true });
     situation.current = { key: 'handoff', text: HANDOFF_PHRASE, stop: false };
@@ -1010,6 +1018,7 @@ export default function App() {
     findBlanks.current = 0;
     saidStandStill.current = false;
     detourRef.current = null;
+    aheadWarned.current = null;
     situation.current = { key: 'lost', text: LOST_PHRASE, stop: false };
   }
 
@@ -1343,11 +1352,13 @@ export default function App() {
     // warnings were noise. Something close (or a stop) starts a detour: step sideways, keep the
     // phone on the target, and turn back once the obstacle reads clear for a couple of answers.
     const o = data.obstacle;
+    // Walking during Search counts too: something ahead gets said even before the hand-off.
+    const walking = phase === 'approach' || movingSince.current !== null;
     const reading =
-      phase === 'approach' && !o.clear && o.distance_m !== null
+      walking && !o.clear && o.distance_m !== null
         ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
         : null;
-    const danger = reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
+    const danger = phase === 'approach' && reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
     const now = Date.now();
     const detour = detourRef.current;
     if (danger) {
@@ -1384,6 +1395,24 @@ export default function App() {
       // One clear frame isn't enough to call it; keep the step instruction until then.
       setFindInfo(data);
       return;
+    }
+    // Something further out straight ahead ("Something ahead, about 3 meters."): said once per
+    // distance step and held long enough to be spoken; then the target guidance carries on.
+    if (reading && reading.key.startsWith('far:ahead')) {
+      const warned = aheadWarned.current;
+      if (!warned || warned.key !== reading.key) {
+        aheadWarned.current = { key: reading.key, at: now };
+        situation.current = reading;
+        buzz(Haptics.ImpactFeedbackStyle.Medium);
+        setFindInfo(data);
+        return;
+      }
+      if (now - warned.at < FIND_AHEAD_HOLD_MS) {
+        setFindInfo(data);
+        return;
+      }
+    } else if (!reading) {
+      aheadWarned.current = null;
     }
     if (data.found && data.bearing_deg !== null) {
       findMisses.current = 0;

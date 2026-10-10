@@ -541,11 +541,24 @@ def find(
     for c in candidates:
         c.pop("_distance")
     result["candidates"] = candidates
-    result["obstacle"] = _sonar_result(depth, warn_distance(mode, warning))
+    obstacle = _sonar_result(depth, max(warn_distance(mode, warning), FIND_OBSTACLE_M * WARNING_SCALE[warning]))
+    if (
+        result["found"] and not obstacle["clear"] and result["distance_m"] is not None
+        and obstacle["direction"] == result["direction"]
+        and abs(obstacle["distance_m"] - result["distance_m"]) <= FIND_SELF_M
+    ):
+        # Walking toward the chair, the nearest thing ahead is the chair. Not an obstacle.
+        obstacle = {"clear": True, "distance_m": None, "direction": None, "open": None}
+    result["obstacle"] = obstacle
     return result
 
 
 FIND_MAX_CANDIDATES = 5
+# While finding, the user is looking at the target, not the path, so obstacles ahead are reported
+# from further out than the guide's indoor 2 m (scaled by "Warn me"): about 3.5 m by default.
+FIND_OBSTACLE_M = 3.5
+# An obstacle in the target's direction at about the target's distance is the target itself.
+FIND_SELF_M = 0.6
 
 
 # DETR's own score for a known target that's sure enough to lock onto (it finds them at 0.7+; real
