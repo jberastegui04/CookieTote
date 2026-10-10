@@ -201,7 +201,9 @@ const WALK_SUSTAIN_MS = 1000;
 // step instruction. Once the obstacle reads clear for DETOUR_CLEAR_FRAMES answers in a row, the
 // voice says to turn back toward the target and the normal approach takes over. Phrases are on
 // the /say list (DETOUR_PHRASES in backend/main.py); change both together.
-type Detour = { side: 'left' | 'right'; startedAt: number; clearFrames: number };
+// side is null when no side was confirmed open: then it only warns ("Stop. Something right in front
+// of you."), never "Step to your …", since stepping into space nobody checked is worse than stopping.
+type Detour = { side: 'left' | 'right' | null; startedAt: number; clearFrames: number };
 const DETOUR_CLEAR_FRAMES = 2;
 const DETOUR_STUCK_MS = 8000; // still blocked after this long: say to back up, and start over
 const DETOUR_STUCK_PHRASE = 'Still blocked. Back up a step.';
@@ -1363,10 +1365,18 @@ export default function App() {
     const detour = detourRef.current;
     if (danger) {
       const obstacleSide: Side = o.direction ?? 'ahead';
-      if (!detour) {
-        const side = o.open ?? (obstacleSide === 'left' ? 'right' : 'left');
-        detourRef.current = { side, startedAt: now, clearFrames: 0 };
-        const next = { key: `detour:${side}:${danger.stop}`, text: detourPhrase(obstacleSide, side, danger.stop), stop: danger.stop };
+      // Only say which way to step when the server confirmed that side is open (nothing within the
+      // warning distance). Otherwise just warn, and after DETOUR_STUCK_MS say to back up, which
+      // retraces ground the user just walked.
+      const open = o.open ?? null;
+      const say = (side: 'left' | 'right' | null) =>
+        side
+          ? { key: `detour:${side}:${danger.stop}`, text: detourPhrase(obstacleSide, side, danger.stop), stop: danger.stop }
+          : { ...danger, key: `detour:hold:${danger.key}` };
+      if (!detour || (detour.side === null && open)) {
+        // New detour, or a held one that now has a confirmed open side to step to.
+        detourRef.current = { side: open, startedAt: detour?.startedAt ?? now, clearFrames: 0 };
+        const next = say(open);
         if (danger.stop) interruptForStop(next);
         situation.current = next;
         buzz(Haptics.ImpactFeedbackStyle.Heavy);
@@ -1377,7 +1387,7 @@ export default function App() {
           detour.startedAt = now;
           situation.current = { key: `detour:stuck:${now}`, text: DETOUR_STUCK_PHRASE, stop: false };
         } else {
-          const next = { key: `detour:${detour.side}:${danger.stop}`, text: detourPhrase(obstacleSide, detour.side, danger.stop), stop: danger.stop };
+          const next = say(detour.side);
           if (danger.stop && !situation.current?.stop) interruptForStop(next);
           situation.current = next;
         }
@@ -1389,8 +1399,11 @@ export default function App() {
       detour.clearFrames += 1;
       if (detour.clearFrames >= DETOUR_CLEAR_FRAMES) {
         detourRef.current = null;
-        situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(detour.side), stop: false };
-        lastDriftAt.current = now; // let "Clear" finish before the drift sentence takes over
+        if (detour.side) {
+          situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(detour.side), stop: false };
+          lastDriftAt.current = now; // let "Clear" finish before the drift sentence takes over
+        }
+        // No side: they only stopped, so the normal approach (and drift) simply resumes.
       }
       // One clear frame isn't enough to call it; keep the step instruction until then.
       setFindInfo(data);
