@@ -36,7 +36,9 @@ type SonarResult = {
   clear: boolean;
   distance_m: number | null;
   direction: 'left' | 'ahead' | 'right' | null;
+  open: 'left' | 'right' | null; // side with clearly more room, if any
 };
+type Side = 'left' | 'ahead' | 'right';
 
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
 
@@ -53,6 +55,20 @@ const WARN_DISTANCE_M: Record<Mode, number> = { indoor: 2, outdoor: 4 };
 const SONAR_PERIOD_MS = 1000;
 // A reading older than this is too stale to keep beeping about.
 const SONAR_STALE_MS = 3000;
+// Under this, with sonar on and the obstacle straight ahead, say so out loud (at most every few seconds).
+const STOP_DISTANCE_M = 0.7;
+const STOP_REPEAT_MS = 4000;
+// After the "ahead" double beep, a softer single beep in the ear with more room. Try it in the
+// blindfold test; set to false if it confuses people.
+const GUIDE_CUE = true;
+
+function majority(items: Side[]): Side {
+  const counts = new Map<Side, number>();
+  for (const i of items) counts.set(i, (counts.get(i) ?? 0) + 1);
+  let best = items[items.length - 1];
+  for (const [k, n] of counts) if (n > (counts.get(best) ?? 0)) best = k;
+  return best;
+}
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -74,6 +90,7 @@ export default function App() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState<string | null>(null);
   const voiceIdRef = useRef<string | null>(null);
+  const screenReader = useRef(false);
   const [cloneStep, setCloneStep] = useState<CloneStep>('idle');
   const cloneStepRef = useRef<CloneStep>('idle');
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -85,7 +102,9 @@ export default function App() {
   const modeRef = useRef<Mode>('indoor');
   const cameraBusy = useRef(false); // one photo at a time, shared by describe and sonar
   const quietUntil = useRef(0); // no beeps while a describe sentence is being spoken
-  const reading = useRef<{ distance: number; direction: 'left' | 'ahead' | 'right'; at: number } | null>(null);
+  const reading = useRef<{ distance: number; direction: Side; open: 'left' | 'right' | null; at: number } | null>(null);
+  const recentDirections = useRef<Side[]>([]); // last few readings, so one noisy frame can't flip the ear
+  const lastStopAt = useRef(0);
   // Three short tones, panned left, center, and right (made by backend/tone.py).
   const toneLeft = useAudioPlayer(require('./assets/tones/left.wav'));
   const toneAhead = useAudioPlayer(require('./assets/tones/center.wav'));
@@ -94,6 +113,8 @@ export default function App() {
   useEffect(() => {
     // Play warnings even when the phone's silent switch is on.
     setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+    AccessibilityInfo.isScreenReaderEnabled().then((on) => (screenReader.current = on));
+    const sub = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => (screenReader.current = on));
     AsyncStorage.getItem(VOICE_KEY)
       .then((saved) => {
         if (saved) {
@@ -113,6 +134,7 @@ export default function App() {
     // Stop the sonar loops if the screen goes away.
     return () => {
       sonarOnRef.current = false;
+      sub.remove();
     };
   }, []);
 
@@ -134,6 +156,17 @@ export default function App() {
     );
   }
 
+  // Short status messages. With VoiceOver on, an interrupting announcement (so it cuts off
+  // VoiceOver re-reading the button); otherwise the phone's built-in voice.
+  function tell(text: string) {
+    if (screenReader.current) {
+      AccessibilityInfo.announceForAccessibilityWithOptions(text, { queue: false });
+    } else {
+      Speech.stop();
+      Speech.speak(text);
+    }
+  }
+
   async function playUri(uri: string, headers?: Record<string, string>) {
     player.replace({ uri, headers });
     // Starting before the clip has loaded cuts off the first word.
@@ -143,6 +176,7 @@ export default function App() {
 
   // Plays the ElevenLabs clip if the backend sent one, otherwise the phone's built-in voice.
   async function say(data: DescribeResult) {
+    Speech.stop();
     if (data.audio_b64) {
       try {
         // The player needs a file, so save the clip to the cache folder first. The backend sends
@@ -261,6 +295,21 @@ export default function App() {
     }
   }
 
+  // Magic tap (two-finger double tap with VoiceOver on) repeats the last warning.
+  async function repeatLast() {
+    const last = result;
+    if (status === 'capturing' || status === 'thinking') {
+      tell('Still checking.');
+      return;
+    }
+    if (!last) {
+      tell('Nothing to repeat yet. Tap anywhere to scan.');
+      return;
+    }
+    quietUntil.current = Date.now() + (last.audio_b64 ? 1500 : 3500);
+    await say(last);
+  }
+
   // Steps to the next voice, plays its sample sentence, and remembers the choice.
   async function nextVoice() {
     if (voices.length === 0) return;
@@ -282,6 +331,7 @@ export default function App() {
     sonarOnRef.current = on;
     setSonarOn(on);
     reading.current = null;
+    recentDirections.current = [];
     setSonarDistance(null);
     AccessibilityInfo.announceForAccessibility(on ? 'Sonar on' : 'Sonar off');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -315,10 +365,19 @@ export default function App() {
           if (!res.ok) throw new Error(`Server ${res.status}`);
           const data: SonarResult = await res.json();
           failures = 0;
-          reading.current =
-            data.clear || data.distance_m === null
-              ? null
-              : { distance: data.distance_m, direction: data.direction ?? 'ahead', at: Date.now() };
+          if (data.clear || data.distance_m === null) {
+            reading.current = null;
+            recentDirections.current = [];
+          } else {
+            // Direction is the majority of the last three readings; distance is always the newest.
+            recentDirections.current = [...recentDirections.current, data.direction ?? 'ahead'].slice(-3);
+            reading.current = {
+              distance: data.distance_m,
+              direction: majority(recentDirections.current),
+              open: data.open ?? null,
+              at: Date.now(),
+            };
+          }
           if (sonarOnRef.current) setSonarDistance(reading.current?.distance ?? null);
         } catch (e) {
           console.warn(e);
@@ -347,9 +406,28 @@ export default function App() {
         await sleep(150);
         continue;
       }
-      const tone = r.direction === 'left' ? toneLeft : r.direction === 'right' ? toneRight : toneAhead;
-      tone.seekTo(0).then(() => tone.play()).catch(() => {});
-      Haptics.impactAsync(r.distance < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium);
+      if (r.direction === 'ahead') {
+        // Straight ahead: double beep in both ears, heavy buzz, and a spoken stop when very close.
+        toneAhead.seekTo(0).then(() => toneAhead.play()).catch(() => {});
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+        if (r.distance <= STOP_DISTANCE_M && Date.now() - lastStopAt.current > STOP_REPEAT_MS) {
+          lastStopAt.current = Date.now();
+          tell(`Stop. Obstacle ahead, very close.${r.open ? ` Clear on the ${r.open}.` : ''}`);
+          await sleep(1800);
+          continue;
+        }
+        if (GUIDE_CUE && r.open) {
+          await sleep(320);
+          const guide = r.open === 'left' ? toneLeft : toneRight;
+          guide.volume = 0.35;
+          guide.seekTo(0).then(() => guide.play()).catch(() => {});
+        }
+      } else {
+        const tone = r.direction === 'left' ? toneLeft : toneRight;
+        tone.volume = 1;
+        tone.seekTo(0).then(() => tone.play()).catch(() => {});
+        Haptics.impactAsync(r.distance < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium);
+      }
       await sleep(beepGapMs(r.distance, modeRef.current));
     }
   }
@@ -359,6 +437,7 @@ export default function App() {
     try {
       setStatus('capturing');
       quietUntil.current = Date.now() + 8000;
+      tell('Scanning');
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       // If sonar is mid-photo, wait for it; the camera takes one picture at a time.
       while (cameraBusy.current) await sleep(50);
@@ -398,7 +477,7 @@ export default function App() {
       setStatus('error');
       quietUntil.current = Date.now() + 2500;
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Speech.speak('No connection. Try again.');
+      tell('No connection. Try again.');
     }
   }
 
@@ -416,7 +495,13 @@ export default function App() {
             : 'Tap anywhere';
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={styles.screen}
+      accessibilityActions={[{ name: 'magicTap', label: 'Repeat the last warning' }]}
+      onAccessibilityAction={(e) => {
+        if (e.nativeEvent.actionName === 'magicTap') repeatLast();
+      }}
+    >
       <StatusBar style="light" />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
 
@@ -427,6 +512,7 @@ export default function App() {
         accessibilityRole="button"
         accessibilityLabel="Describe what's ahead"
         accessibilityHint="Double tap to scan"
+        accessibilityState={{ busy: status === 'capturing' || status === 'thinking' }}
       />
 
       <View style={styles.topBar} pointerEvents="box-none">
@@ -498,10 +584,9 @@ export default function App() {
         </Pressable>
       </View>
 
-      <View style={styles.bottomPanel} pointerEvents="none">
-        <Text style={styles.distance} accessibilityLiveRegion="polite">
-          {headline}
-        </Text>
+      {/* Visual only (for sighted viewers and the projector). Everything here is also spoken. */}
+      <View style={styles.bottomPanel} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <Text style={styles.distance}>{headline}</Text>
         {!sonarOn && result?.sentence ? <Text style={styles.sentence}>{result.sentence}</Text> : null}
       </View>
     </View>

@@ -38,6 +38,9 @@ BAND_MARGIN_M = 0.3
 # The model reads phone photos too far away. Multiply by this to get real meters. Fit to photos
 # with tape-measured distances (tune.py): indoor reads about 1.25x too far, outdoor about 2.9x.
 DEPTH_SCALE = {"indoor": 0.8, "outdoor": 0.35}
+# A side column counts as "open" (more room to go around) if its closest reading is at least this
+# much farther than the obstacle.
+OPEN_MARGIN_M = 1.0
 # At or under this, say "very close" instead of a number.
 VERY_CLOSE_M = 0.5
 # Friendlier names for DETR's COCO labels.
@@ -98,8 +101,21 @@ def find_obstacle(depth: np.ndarray, mode: str) -> dict | None:
     # drown out a chair on the left at waist height.
     if cells["ahead", best["height"]] - best["distance"] <= SIDE_MARGIN_M:
         best["direction"] = "ahead"
+    best["open"] = open_side(cells, best, mode)
     best["box"] = _box(depth, best["distance"], mode)
     return best
+
+
+def open_side(cells: dict, best: dict, mode: str) -> str | None:
+    """The side column with clearly more room than the obstacle, or None."""
+    room = {}
+    for side in ("left", "right"):
+        if side != best["direction"]:
+            room[side] = min(cells[side, h] for h in bands_for(mode))
+    if not room:
+        return None
+    side = max(room, key=room.get)
+    return side if room[side] - best["distance"] >= OPEN_MARGIN_M else None
 
 
 def _box(depth: np.ndarray, distance: float, mode: str) -> list[float] | None:
@@ -151,32 +167,37 @@ def describe(image: Image.Image, mode: str) -> dict:
             "direction": None,
             "height": None,
             "box": None,
+            "open": None,
         }
     # Detection only runs when there's something to name, so a clear path stays fast.
     label = label_for(image, depth, hit["distance"], hit["box"])
     distance_m = round_half(hit["distance"])
     return {
         "clear": False,
-        "sentence": to_sentence(label, distance_m, hit["direction"], hit["height"]),
+        "sentence": to_sentence(label, distance_m, hit["direction"], hit["height"], hit["open"]),
         "label": label,
         "distance_m": distance_m,
         "direction": hit["direction"],
         "height": hit["height"],
         "box": hit["box"],
+        "open": hit["open"],
     }
 
 
 def sonar(image: Image.Image, mode: str) -> dict:
     hit = find_obstacle(depth_map(image, mode), mode)
     if hit is None:
-        return {"clear": True, "distance_m": None, "direction": None}
+        return {"clear": True, "distance_m": None, "direction": None, "open": None}
     # Finer than half meters so the beep rate changes smoothly as you walk.
-    return {"clear": False, "distance_m": round(hit["distance"], 1), "direction": hit["direction"]}
+    return {"clear": False, "distance_m": round(hit["distance"], 1), "direction": hit["direction"], "open": hit["open"]}
 
 
-def to_sentence(label: str | None, distance_m: float | None, direction: str | None, height: str | None) -> str:
+def to_sentence(
+    label: str | None, distance_m: float | None, direction: str | None, height: str | None, open_side: str | None = None
+) -> str:
     if distance_m is None:
         return "Path clear"
+    tail = f". Clear on the {open_side}" if open_side else ""
     meters = round(distance_m * 2) / 2  # round to half meters
     unit = "meter" if meters == 1 else "meters"
     # "1 meter ahead" reads as one phrase; "1 meter, slightly left" needs the pause.
@@ -188,5 +209,5 @@ def to_sentence(label: str | None, distance_m: float | None, direction: str | No
     else:
         how_far = f"{meters:g} {unit}"
     if label:
-        return f"{label.capitalize()}, {how_far}{where}"
-    return f"Obstacle at {height} height, {how_far}{where}"
+        return f"{label.capitalize()}, {how_far}{where}{tail}"
+    return f"Obstacle at {height} height, {how_far}{where}{tail}"

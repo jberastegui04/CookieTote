@@ -8,7 +8,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Describe mode.** Tap anywhere on the screen. The app takes one photo, finds the closest obstacle in your walking path, and speaks it, for example "chair, about one meter, slightly left" or "obstacle at head height, one meter ahead."
 
-**Sonar mode.** A toggle you leave on while walking. The app checks depth about once a second and plays beeps and haptics that speed up as you get closer. The tone plays from the obstacle's side (left, center, or right). No speech, so you can keep moving. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
+**Sonar mode.** A toggle you leave on while walking. The app checks depth about once a second and plays beeps and haptics that speed up as you get closer. A single beep in one ear means an obstacle on that side; a lower double beep in both ears means it's straight ahead, followed by a softer beep in the ear with more room. Under about 0.7 m straight ahead it says "Stop. Obstacle ahead, very close." Otherwise no speech, so you can keep moving. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
 **Indoor and outdoor setting.** Applies to both modes. Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors).
 
@@ -57,6 +57,7 @@ Full result for describe mode. Slower, called once per tap. Also takes an option
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `height` | string or null | `foot`, `waist`, or `head` |
 | `box` | list of 4 numbers or null | obstacle outline for the overlay, as x, y, width, height in 0 to 1 of the image |
+| `open` | string or null | `left` or `right` if that side of the lane has clearly more room than the obstacle, else null. The sentence ends with "clear on the left" when set |
 | `audio_b64` | string or null | ElevenLabs WAV of the sentence (16 kHz mono, short silence at both ends), base64. Null if the key is missing or ElevenLabs fails, so the app falls back to expo-speech |
 
 ### POST /sonar
@@ -68,6 +69,7 @@ Fast result for sonar mode. Depth only, no detection, no speech. Called about on
 | `clear` | boolean | true if nothing is in the path |
 | `distance_m` | number or null | distance to the closest obstacle |
 | `direction` | string or null | `left`, `ahead`, or `right` |
+| `open` | string or null | `left` or `right` if that side has clearly more room, else null |
 
 ### GET /voices
 
