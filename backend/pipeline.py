@@ -3,6 +3,7 @@
 Both functions take a PIL image and a mode ("indoor" or "outdoor") and return a dict.
 main.py adds audio_b64 to the describe() result, so don't add it here.
 """
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,10 +75,28 @@ DETECT_DEPTH_MARGIN_M = 0.5
 # GPU when the Space has one (all three models together drop from about 1.1 s to about 0.1 s a frame),
 # CPU otherwise, so laptops and the CPU Space keep working unchanged.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# Half precision on the GPU: faster on a T4, same answers to the precision we report. Each model is
+# tried on a tiny image at load; if fp16 fails there, that model stays at full precision. FP16=0 in
+# the Space's settings turns it off.
+HALF = DEVICE == "cuda" and os.getenv("FP16", "1") != "0"
+
+
+def _pipe(task: str, model: str, **probe):
+    """A pipeline on DEVICE, in fp16 when HALF and it works, else fp32."""
+    if HALF:
+        try:
+            p = hf_pipeline(task, model=model, device=DEVICE, dtype=torch.float16)
+            p(Image.new("RGB", (64, 64)), **probe)
+            print(f"{model}: fp16", flush=True)
+            return p
+        except Exception as e:  # an op without half support: keep this model at fp32
+            print(f"{model}: fp16 failed ({type(e).__name__}: {e}), using fp32", flush=True)
+    return hf_pipeline(task, model=model, device=DEVICE)
+
 
 # Load once at import so each request doesn't reload the model. Outdoor loads on first use.
-_depth_pipes = {"indoor": hf_pipeline("depth-estimation", model=DEPTH_MODELS["indoor"], device=DEVICE)}
-_detector = hf_pipeline("object-detection", model=DETECT_MODEL, device=DEVICE)
+_depth_pipes = {"indoor": _pipe("depth-estimation", DEPTH_MODELS["indoor"])}
+_detector = _pipe("object-detection", DETECT_MODEL)
 # find() runs depth and detection side by side instead of one after the other. On a GPU that
 # overlaps them; on CPU it's about even, since each model already uses every core.
 _parallel = ThreadPoolExecutor(max_workers=4)
@@ -86,9 +105,9 @@ _parallel = ThreadPoolExecutor(max_workers=4)
 def depth_map(image: Image.Image, mode: str) -> np.ndarray:
     """Depth in meters as a 2D array. Uses predicted_depth (meters), not depth (a picture for viewing)."""
     if mode not in _depth_pipes:
-        _depth_pipes[mode] = hf_pipeline("depth-estimation", model=DEPTH_MODELS[mode], device=DEVICE)
+        _depth_pipes[mode] = _pipe("depth-estimation", DEPTH_MODELS[mode])
     out = _depth_pipes[mode](image)
-    return out["predicted_depth"].squeeze().cpu().numpy() * DEPTH_SCALE[mode]
+    return out["predicted_depth"].squeeze().float().cpu().numpy() * DEPTH_SCALE[mode]
 
 
 def _rows(depth: np.ndarray, span: tuple[float, float]) -> slice:
@@ -296,7 +315,7 @@ def _open_detector():
     """Loaded on first use, so the server starts as fast as before."""
     with _open_lock:
         if "pipe" not in _open:
-            _open["pipe"] = hf_pipeline("zero-shot-object-detection", model=OPEN_VOCAB_MODEL, device=DEVICE)
+            _open["pipe"] = _pipe("zero-shot-object-detection", OPEN_VOCAB_MODEL, candidate_labels=["door"])
     return _open["pipe"]
 
 
@@ -313,7 +332,17 @@ def _match_model():
     with _match_lock:
         if not _match:
             _match["processor"] = AutoProcessor.from_pretrained(MATCH_MODEL)
-            _match["model"] = AutoModel.from_pretrained(MATCH_MODEL).eval().to(DEVICE)
+            model = AutoModel.from_pretrained(MATCH_MODEL).eval().to(DEVICE)
+            if HALF:
+                try:
+                    model = model.half()
+                    with torch.inference_mode():
+                        model(**_match_inputs(_match["processor"], model, ["a photo"], [Image.new("RGB", (64, 64))]))
+                    print(f"{MATCH_MODEL}: fp16", flush=True)
+                except Exception as e:
+                    print(f"{MATCH_MODEL}: fp16 failed ({type(e).__name__}: {e}), using fp32", flush=True)
+                    model = model.float()
+            _match["model"] = model
     return _match["processor"], _match["model"]
 
 
@@ -364,10 +393,16 @@ def parse_request(text: str) -> tuple[str | None, str | None]:
 
 def _match_scores(crops: list[Image.Image], description: str) -> list[float]:
     processor, model = _match_model()
-    inputs = processor(text=[f"a photo of a {description}"], images=crops, padding="max_length", return_tensors="pt").to(DEVICE)
+    inputs = _match_inputs(processor, model, [f"a photo of a {description}"], crops)
     with torch.inference_mode():
         logits = model(**inputs).logits_per_image[:, 0]
-    return torch.sigmoid(logits).tolist()
+    return torch.sigmoid(logits.float()).tolist()
+
+
+def _match_inputs(processor, model, texts: list[str], images: list[Image.Image]):
+    inputs = processor(text=texts, images=images, padding="max_length", return_tensors="pt").to(DEVICE)
+    inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)  # fp16 model on the GPU
+    return inputs
 
 
 def feet_words(meters: float) -> str:
@@ -426,9 +461,9 @@ SCENE_PROMPTS = ("a photo taken indoors", "a photo taken outdoors")
 
 def guess_scene(image: Image.Image) -> str:
     processor, model = _match_model()
-    inputs = processor(text=list(SCENE_PROMPTS), images=[image], padding="max_length", return_tensors="pt").to(DEVICE)
+    inputs = _match_inputs(processor, model, list(SCENE_PROMPTS), [image])
     with torch.inference_mode():
-        logits = model(**inputs).logits_per_image[0]
+        logits = model(**inputs).logits_per_image[0].float()
     return "outdoor" if float(logits[1] - logits[0]) > 0 else "indoor"
 
 
