@@ -114,13 +114,13 @@ export default function FindScreen(p: Props) {
       >
         {box ? (
           <>
-            {/* Searching: a thin dashed outline, no glow. Locked on: solid, bold, glowing. */}
-            {r?.locked ? <Animated.View style={[styles.glow, boxStyle]} /> : null}
+            {/* Searching: a thin dashed outline. Locked on: solid. One box, no glow. */}
             <Animated.View style={[styles.box, !r?.locked && styles.boxSearching, boxStyle]} />
             <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop, opacity: r?.stale ? 0.6 : 1 }]}>
+              {/* "Found", not the name: a described target ("person in a dark hoodie") is too long for a tag. */}
               <Text style={styles.tagText}>
                 {r?.locked ? '● ' : ''}
-                {name}
+                Found
                 {r?.distance_m != null ? ` · ${formatDistance(r.distance_m, p.units)}` : ''}
               </Text>
             </Animated.View>
@@ -238,17 +238,6 @@ const styles = StyleSheet.create({
   stopText: { color: C.onAccent, fontSize: 26, ...font('bold') },
   box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },
   boxSearching: { borderWidth: 3, borderStyle: 'dashed' },
-  glow: {
-    position: 'absolute',
-    borderWidth: 10,
-    borderColor: 'rgba(255,214,10,0.4)',
-    borderRadius: 22,
-    margin: -5,
-    shadowColor: C.accent,
-    shadowOpacity: 1,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 0 },
-  },
   tag: {
     position: 'absolute',
     backgroundColor: C.accent,

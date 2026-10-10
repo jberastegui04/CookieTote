@@ -1058,8 +1058,10 @@ export default function App() {
         tell("I didn't catch that. Try again.");
         return;
       }
+      // The server sends no target when it heard something that doesn't sound like a thing to find
+      // (someone nearby talking, say). Ask again rather than search for the wrong thing.
       if (!data.target) {
-        tell('I can find chairs, tables, benches, couches and people. Say one of those.');
+        tell("I didn't catch what to find. Try again, like: find the red chair.");
         return;
       }
       startFind(data.target, data.description, data.open_vocab ?? false);
@@ -1068,7 +1070,7 @@ export default function App() {
       setSpeakState('idle');
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
       notify(Haptics.NotificationFeedbackType.Error);
-      tell('Could not understand. Try again, or pick from the list.');
+      tell('Could not understand. Try again, or type it.');
     }
   }
 
@@ -1871,7 +1873,6 @@ export default function App() {
             <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={styles.bottomShade} />
             {box ? (
               <>
-                <View style={[styles.glow, box]} />
                 <View style={[styles.box, box]} />
                 <View style={[styles.tag, { left: box.left, top: Math.max(SAFE.top + 72, box.top - 48) }]}>
                   <Text style={styles.tagText}>
@@ -2000,19 +2001,7 @@ const styles = StyleSheet.create({
   },
   chipLarge: { backgroundColor: C.card, borderColor: C.border, borderWidth: 1.5 },
   chipText: { color: C.ink, fontSize: 18, ...font('semibold') },
-  box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18, backgroundColor: 'rgba(255,214,10,0.08)' },
-  // Soft glow around the outline, like the Figma (iOS draws it from the shadow).
-  glow: {
-    position: 'absolute',
-    borderWidth: 10,
-    borderColor: 'rgba(255,214,10,0.4)',
-    borderRadius: 22,
-    margin: -5,
-    shadowColor: C.accent,
-    shadowOpacity: 1,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 0 },
-  },
+  box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },
   tag: {
     position: 'absolute',
     backgroundColor: C.accent,

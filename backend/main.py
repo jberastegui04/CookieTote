@@ -191,6 +191,28 @@ TRANSCRIBE_PER_MINUTE = 20
 _transcribe_times: deque[float] = deque()
 
 
+# Words that start a Find request. When several people are heard, the one who said one of these is
+# the user; the text is cut to start at the last one, so chatter before "find" is dropped.
+ASK_WORDS = {"find", "where", "where's", "look", "looking", "search", "show", "take", "locate"}
+# An object outside the 13 described in more words than this is more likely overheard talk than a
+# request ("he said the game was great"), so nothing is searched and the user is asked again.
+OPEN_VOCAB_MAX_WORDS = 4
+
+
+def pick_request(full: str, by_speaker: list[str]) -> str:
+    """The user's words out of everything heard: the speaker who asked, else whoever spoke first."""
+    def asks(text: str) -> bool:
+        return any(w.strip(".,!?").lower() in ASK_WORDS for w in text.split())
+
+    text = full
+    if len(by_speaker) > 1:
+        asked = [s for s in by_speaker if asks(s)]
+        text = asked[-1] if asked else by_speaker[0]
+    words = text.split()
+    starts = [i for i, w in enumerate(words) if w.strip(".,!?").lower() in ASK_WORDS]
+    return " ".join(words[starts[-1]:]) if starts else text
+
+
 @app.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...)):
     """Spoken Find request ("find the red bench") -> text, target, and description for /find."""
@@ -204,7 +226,7 @@ async def transcribe(audio: UploadFile = File(...)):
         raise HTTPException(429, "too many requests, try again in a minute")
     _transcribe_times.append(now)
     try:
-        text = await run_in_threadpool(
+        full, by_speaker = await run_in_threadpool(
             voice.transcribe, data, audio.filename or "request.m4a", audio.content_type or "audio/m4a"
         )
     except requests.HTTPError as e:
@@ -212,8 +234,12 @@ async def transcribe(audio: UploadFile = File(...)):
         raise HTTPException(502, f"ElevenLabs speech-to-text refused: {detail}")
     except requests.RequestException as e:
         raise HTTPException(502, f"ElevenLabs unreachable: {e}")
+    text = pick_request(full, by_speaker)
     target, description = pipeline.parse_request(text)
     open_vocab = target is None
+    if open_vocab and description and len(description.split()) > OPEN_VOCAB_MAX_WORDS:
+        # Doesn't sound like a thing to find. The app asks again instead of searching for it.
+        return {"text": text, "target": None, "description": description, "open_vocab": False}
     if open_vocab:
         # Not one of the 13: /find searches for the words themselves ("door", "exit sign").
         target = pipeline.open_query(description)

@@ -178,14 +178,21 @@ def speak_b64(sentence: str, voice_id: str | None = None) -> str | None:
 STT_MODEL_ID = "scribe_v2"
 
 
-def transcribe(audio: bytes, filename: str, content_type: str) -> str:
-    """Text of a short spoken request. Raises requests exceptions on failure."""
+def transcribe(audio: bytes, filename: str, content_type: str) -> tuple[str, list[str]]:
+    """Text of a short spoken request, and what each voice said (in the order they first spoke), so
+    the caller can keep the user's words when someone nearby is talking too. Raises requests
+    exceptions on failure."""
     res = requests.post(
         "https://api.elevenlabs.io/v1/speech-to-text",
         headers=_headers(),
-        data={"model_id": STT_MODEL_ID},
+        data={"model_id": STT_MODEL_ID, "diarize": "true", "tag_audio_events": "false"},
         files={"file": (filename, audio, content_type)},
         timeout=15,
     )
     res.raise_for_status()
-    return (res.json().get("text") or "").strip()
+    body = res.json()
+    by_speaker: dict[str, list[str]] = {}
+    for w in body.get("words") or []:
+        if w.get("type") == "word":
+            by_speaker.setdefault(w.get("speaker_id") or "", []).append(w["text"])
+    return (body.get("text") or "").strip(), [" ".join(ws) for ws in by_speaker.values()]
