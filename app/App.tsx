@@ -1575,7 +1575,7 @@ export default function App() {
   );
 
   const guideButton = (
-    <View>
+    <View style={styles.modeCell}>
       {guideOn ? (
         <Animated.View
           pointerEvents="none"
@@ -1599,7 +1599,11 @@ export default function App() {
         accessibilityLabel="Guide"
         accessibilityHint="A voice tells you about obstacles while you walk. Walk slowly while it's on."
       >
-        <Text style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}>
+        <Text
+          style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
           {guideOn ? 'Guide on' : 'Guide off'}
         </Text>
       </Pressable>
@@ -1607,21 +1611,25 @@ export default function App() {
   );
 
   const findButton = (
-    <Pressable
-      style={({ pressed }) => [styles.guide, styles.guideOff, styles.find, !cameraPicture && styles.guideLarge, pressed && styles.pressed]}
-      onPress={openFindPicker}
-      accessibilityRole="button"
-      accessibilityLabel="Find"
-      accessibilityHint="Pick something to find, like a chair. A voice tells you which way to turn."
-    >
-      <Text style={[styles.guideText, styles.guideTextOff]}>Find</Text>
-    </Pressable>
+    <View style={styles.modeCell}>
+      <Pressable
+        style={({ pressed }) => [styles.guide, styles.guideOff, !cameraPicture && styles.guideLarge, pressed && styles.pressed]}
+        onPress={openFindPicker}
+        accessibilityRole="button"
+        accessibilityLabel="Find"
+        accessibilityHint="Pick something to find, like a chair. A voice tells you which way to turn."
+      >
+        <Text style={[styles.guideText, styles.guideTextOff]} numberOfLines={1} adjustsFontSizeToFit>
+          Find
+        </Text>
+      </Pressable>
+    </View>
   );
 
   // Guide and Find side by side, the two things you start while walking.
   const modeButtons = (
     <View style={styles.modeRow}>
-      <View style={styles.modeCell}>{guideButton}</View>
+      {guideButton}
       {findButton}
     </View>
   );
@@ -1843,9 +1851,9 @@ const styles = StyleSheet.create({
   headline: { color: C.blue, fontSize: 34, ...font('bold') },
   headlineNumber: { fontSize: 56, ...font('heavy') },
   detail: { color: C.ink2, fontSize: 18, marginTop: SPACE.xs, ...font('semibold') },
-  guide: { minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  guideLarge: { minHeight: 96, borderRadius: 48 },
-  find: { flex: 1 },
+  // Fixed height (not minHeight) so Guide and Find always match, whatever the label says.
+  guide: { height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  guideLarge: { height: 96, borderRadius: 48 },
   modeRow: { flexDirection: 'row', gap: SPACE.md },
   modeCell: { flex: 1 },
   guideOn: { backgroundColor: C.blue },
