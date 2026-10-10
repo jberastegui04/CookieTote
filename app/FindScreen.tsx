@@ -194,8 +194,6 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 22,
-    borderLeftWidth: 6,
-    borderLeftColor: C.blue,
     paddingHorizontal: GUTTER,
     paddingVertical: SPACE.lg,
   },
