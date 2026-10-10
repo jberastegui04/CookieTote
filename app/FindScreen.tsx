@@ -1,7 +1,39 @@
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, Easing, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Tap } from './controls';
 import { capitalize, HALF_FOV_DEG, type FindResult } from './find';
+import { useReduceMotion } from './motion';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
+
+// The box moves on every gyro reading (about 20 a second) and every server answer. Gliding to each
+// new spot over a bit more than one reading blends them into continuous motion instead of jumps.
+const GLIDE_MS = 120;
+
+// An animated number that glides to `target`. Jumps straight there the first time (so the box
+// doesn't fly in from the corner) and always when Reduce Motion is on.
+function useGlide(target: number | null, reduce: boolean) {
+  const value = useRef(new Animated.Value(target ?? 0)).current;
+  const showing = useRef(false);
+  useEffect(() => {
+    if (target == null) {
+      showing.current = false;
+      return;
+    }
+    if (!showing.current || reduce) {
+      value.stopAnimation();
+      value.setValue(target);
+      showing.current = true;
+      return;
+    }
+    Animated.timing(value, {
+      toValue: target,
+      duration: GLIDE_MS,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false, // left/top/width/height can't use the native driver
+    }).start();
+  }, [target, reduce, value]);
+  return value;
+}
 
 type Props = {
   target: string;
@@ -57,6 +89,15 @@ export default function FindScreen(p: Props) {
     box = { left: offX + x * photoW, top: offY + y * scale, width: w * photoW, height: h * scale };
   }
 
+  const reduce = useReduceMotion();
+  const boxLeft = useGlide(box?.left ?? null, reduce);
+  const boxTop = useGlide(box?.top ?? null, reduce);
+  const boxWidth = useGlide(box?.width ?? null, reduce);
+  const boxHeight = useGlide(box?.height ?? null, reduce);
+  const tagTop = useGlide(box ? Math.max(SAFE.top + 140, box.top - 48) : null, reduce);
+  const dot = useGlide(found ? dotFrac : null, reduce);
+  const boxStyle = { left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight };
+
   const large = !p.cameraPicture;
 
   return (
@@ -70,14 +111,14 @@ export default function FindScreen(p: Props) {
       >
         {box ? (
           <>
-            <View style={[styles.glow, box]} />
-            <View style={[styles.box, box]} />
-            <View style={[styles.tag, { left: box.left, top: Math.max(SAFE.top + 140, box.top - 48) }]}>
+            <Animated.View style={[styles.glow, boxStyle]} />
+            <Animated.View style={[styles.box, boxStyle]} />
+            <Animated.View style={[styles.tag, { left: boxLeft, top: tagTop }]}>
               <Text style={styles.tagText}>
                 {name}
                 {r?.distance_m != null ? ` · ${r.distance_m.toFixed(1)} m` : ''}
               </Text>
-            </View>
+            </Animated.View>
           </>
         ) : null}
 
@@ -97,11 +138,11 @@ export default function FindScreen(p: Props) {
               <View style={styles.meter}>
                 <View style={[styles.track, r.centered && styles.trackOn]} />
                 <View style={styles.centerMark} />
-                <View
+                <Animated.View
                   style={[
                     styles.dot,
                     r.centered && styles.dotOn,
-                    { left: `${dotFrac * 100}%` },
+                    { left: dot.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) },
                   ]}
                 />
               </View>

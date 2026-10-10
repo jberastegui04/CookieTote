@@ -127,6 +127,8 @@ const clockPhrase = (target: string, offsetDeg: number) => {
   return `${capitalize(target)} at ${hour} o'clock.`;
 };
 const wrapDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-180, 180]
+// Each gyro reading moves the heading this fraction of the way to the new value (1 = no smoothing).
+const HEADING_SMOOTHING = 0.5;
 // Centered and this close: you've arrived. Find stops and says to reach forward.
 const ARRIVE_DISTANCE_M = 0.7;
 const arrivalPhrase = (target: string) => `You're there. The ${target} is right in front of you. Reach forward.`;
@@ -773,10 +775,14 @@ export default function App() {
     headingRef.current = null;
     try {
       if (!(await DeviceMotion.isAvailableAsync())) return;
-      DeviceMotion.setUpdateInterval(100);
+      // 20 readings a second; FindScreen glides the box between them so it moves smoothly.
+      DeviceMotion.setUpdateInterval(50);
       motionSub.current = DeviceMotion.addListener((m) => {
         if (m.rotation) {
-          headingRef.current = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
+          const raw = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
+          const prev = headingRef.current;
+          // Light smoothing takes the hand shake out of the box without noticeable lag.
+          headingRef.current = prev === null ? raw : wrapDeg(prev + HEADING_SMOOTHING * wrapDeg(raw - prev));
           setHeadingNow(headingRef.current);
         }
       });
