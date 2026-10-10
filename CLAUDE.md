@@ -37,7 +37,7 @@ Both `/describe` and `/sonar` include `open` ("left" | "right" | null): the side
 - The whole screen is the scan button. Never require precise taps. Magic tap repeats the last warning.
 - Status changes are announced with `AccessibilityInfo.announceForAccessibility`. Nothing is shown only on screen. The camera overlay is hidden from VoiceOver.
 - App audio starts a moment after a tap so it doesn't overlap VoiceOver.
-- Black background, yellow accent (#FFD60A), large bold system font, contrast at least 7:1.
+- Blue (#0047B3) on white, matching the Figma file; colors live in `app/theme.ts`. Large bold text (Atkinson Hyperlegible Next once installed), contrast at least 7:1.
 - Claims stay modest: stationary obstacles only; does not replace a cane; no curbs, drop-offs, moving cars, or street crossings.
 
 ## Conventions

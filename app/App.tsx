@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
@@ -14,6 +14,10 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Settings from './Settings';
+import Setup, { type Vision } from './Setup';
+import { DEFAULT_PREFS, SPEEDS, type Prefs } from './prefs';
+import { C, font } from './theme';
 
 // Your laptop's address on the same Wi-Fi, set in app/.env (see README).
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
@@ -48,6 +52,12 @@ type Voice = { id: string; name: string };
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 const CLONE_MAX_MS = 30000;
 const VOICE_KEY = 'voice_id';
+const MODE_KEY = 'mode';
+const CAMERA_KEY = 'camera_picture';
+const SETUP_KEY = 'setup_done';
+const PREFS_KEY = 'prefs';
+// The obstacle tag and card clear after this, so an old warning doesn't linger once you've passed it.
+const RESULT_SHOW_MS = 5000;
 // Free ngrok links answer with an HTML warning page unless this header is sent.
 const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
@@ -90,6 +100,12 @@ function beepGapMs(distance: number, mode: Mode) {
   return 150 + t * 850;
 }
 
+const DIRECTION_WORD = { left: 'slightly left', ahead: 'ahead', right: 'slightly right' } as const;
+const ARROW = { left: '←', ahead: '↑', right: '→' } as const;
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+// Photos come back portrait 3:4; the preview fills the screen and crops the sides.
+const PHOTO_ASPECT = 3 / 4;
+
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
@@ -122,11 +138,45 @@ export default function App() {
   const toneAhead = useAudioPlayer(require('./assets/tones/center.wav'));
   const toneRight = useAudioPlayer(require('./assets/tones/right.wav'));
 
+  // Screens and layout. Settings opens over the camera so sonar keeps working.
+  const [showSettings, setShowSettings] = useState(false);
+  // Off: no camera picture, just the big number (for people who see little of the screen).
+  const [cameraPicture, setCameraPicture] = useState(true);
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  // null until the saved answer loads, so the camera doesn't flash before setup.
+  const [setupDone, setSetupDone] = useState<boolean | null>(null);
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  const prefsRef = useRef<Prefs>(DEFAULT_PREFS);
+  // The last result stays (magic tap repeats it), but its on-screen tag hides after a few seconds.
+  const [resultVisible, setResultVisible] = useState(false);
+
+  useEffect(() => {
+    if (!result) return;
+    setResultVisible(true);
+    const t = setTimeout(() => setResultVisible(false), RESULT_SHOW_MS);
+    return () => clearTimeout(t);
+  }, [result]);
+
   useEffect(() => {
     // Play warnings even when the phone's silent switch is on.
     setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
     AccessibilityInfo.isScreenReaderEnabled().then((on) => (screenReader.current = on));
     const sub = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => (screenReader.current = on));
+    AsyncStorage.multiGet([MODE_KEY, CAMERA_KEY, SETUP_KEY, PREFS_KEY])
+      .then(([[, savedMode], [, savedCamera], [, savedSetup], [, savedPrefs]]) => {
+        setSetupDone(savedSetup === '1');
+        if (savedPrefs) {
+          const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs) };
+          prefsRef.current = loaded;
+          setPrefs(loaded);
+        }
+        if (savedMode === 'indoor' || savedMode === 'outdoor') {
+          modeRef.current = savedMode;
+          setMode(savedMode);
+        }
+        if (savedCamera === 'off') setCameraPicture(false);
+      })
+      .catch(() => setSetupDone(false));
     AsyncStorage.getItem(VOICE_KEY)
       .then((saved) => {
         if (saved) {
@@ -150,17 +200,36 @@ export default function App() {
     };
   }, []);
 
+  if (setupDone === null) return <View style={[styles.screen, styles.blank]} />;
+
+  if (!setupDone) {
+    return (
+      <Setup
+        mode={mode}
+        onMode={changeMode}
+        onVision={chooseVision}
+        voices={voices}
+        voiceId={voiceId}
+        onPickVoice={pickVoice}
+        onFinish={finishSetup}
+      />
+    );
+  }
+
   if (!permission) return <View style={styles.screen} />;
 
   if (!permission.granted) {
     return (
       <View style={[styles.screen, styles.center]}>
+        <StatusBar style="dark" />
         <Text style={styles.title}>Camera access needed</Text>
+        <Text style={styles.body}>The camera looks ahead to find obstacles in your path.</Text>
         <Pressable
           style={styles.button}
           onPress={requestPermission}
           accessibilityRole="button"
           accessibilityLabel="Allow camera access"
+          accessibilityHint="Shows the camera permission prompt"
         >
           <Text style={styles.buttonText}>Allow camera</Text>
         </Pressable>
@@ -179,10 +248,55 @@ export default function App() {
     }
   }
 
+  function changeMode(next: Mode) {
+    modeRef.current = next;
+    setMode(next);
+    AsyncStorage.setItem(MODE_KEY, next).catch(() => {});
+    tell(next === 'indoor' ? 'Indoor' : 'Outdoor');
+  }
+
+  function chooseVision(v: Vision) {
+    // Only those who can see the screen get the camera picture; the others get the big number.
+    changeCameraPicture(v === 'see', false);
+  }
+
+  function finishSetup() {
+    AsyncStorage.setItem(SETUP_KEY, '1').catch(() => {});
+    setSetupDone(true);
+  }
+
+  function replaySetup() {
+    setShowSettings(false);
+    setSetupDone(false);
+  }
+
+  function updatePrefs(change: Partial<Prefs>) {
+    const next = { ...prefsRef.current, ...change };
+    prefsRef.current = next;
+    setPrefs(next);
+    AsyncStorage.setItem(PREFS_KEY, JSON.stringify(next)).catch(() => {});
+  }
+
+  // Vibration for warnings and sonar, unless turned off in Settings.
+  function buzz(style: Haptics.ImpactFeedbackStyle) {
+    return prefsRef.current.haptics ? Haptics.impactAsync(style) : Promise.resolve();
+  }
+
+  function notify(type: Haptics.NotificationFeedbackType) {
+    return prefsRef.current.haptics ? Haptics.notificationAsync(type) : Promise.resolve();
+  }
+
+  function changeCameraPicture(on: boolean, announce = true) {
+    setCameraPicture(on);
+    AsyncStorage.setItem(CAMERA_KEY, on ? 'on' : 'off').catch(() => {});
+    if (announce) tell(on ? 'Camera picture on' : 'Camera picture off');
+  }
+
   async function playUri(uri: string, headers?: Record<string, string>) {
     player.replace({ uri, headers });
     // Starting before the clip has loaded cuts off the first word.
     for (let i = 0; i < 80 && !player.isLoaded; i++) await sleep(25);
+    player.setPlaybackRate(SPEEDS[prefsRef.current.speed].rate);
     player.play();
   }
 
@@ -204,7 +318,7 @@ export default function App() {
         console.warn(e);
       }
     }
-    Speech.speak(data.sentence);
+    Speech.speak(data.sentence, { rate: SPEEDS[prefsRef.current.speed].rate });
   }
 
   function setClone(step: CloneStep) {
@@ -262,7 +376,7 @@ export default function App() {
         return;
       }
       setClone('recording');
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await notify(Haptics.NotificationFeedbackType.Success);
       AccessibilityInfo.announceForAccessibility('Recording. Speak naturally. Double tap to stop.');
       setTimeout(() => {
         if (cloneStepRef.current === 'recording') cloneTap();
@@ -291,7 +405,7 @@ export default function App() {
       await loadVoices().catch(() => setVoices((prev) => [added, ...prev]));
       chooseVoice(added);
       setClone('idle');
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await notify(Haptics.NotificationFeedbackType.Success);
       AccessibilityInfo.announceForAccessibility('Voice added. Playing a sample.');
       Speech.speak('Voice added.');
       await sleep(1200);
@@ -300,7 +414,7 @@ export default function App() {
       console.warn(e);
       setClone('idle');
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      await notify(Haptics.NotificationFeedbackType.Error);
       const spoken = e instanceof Error && e.cause === 'spoken' ? e.message : 'Could not add the voice. Try again.';
       AccessibilityInfo.announceForAccessibility(spoken);
       Speech.speak(spoken);
@@ -322,17 +436,14 @@ export default function App() {
     await say(last);
   }
 
-  // Steps to the next voice, plays its sample sentence, and remembers the choice.
-  async function nextVoice() {
-    if (voices.length === 0) return;
-    const i = voices.findIndex((v) => v.id === voiceIdRef.current);
-    const next = voices[(i + 1) % voices.length];
-    chooseVoice(next);
-    AccessibilityInfo.announceForAccessibility(`Voice: ${next.name}`);
+  // Picks a voice from the list, plays its sample sentence, and remembers the choice.
+  async function pickVoice(v: Voice) {
+    chooseVoice(v);
+    AccessibilityInfo.announceForAccessibility(`Voice: ${v.name}`);
     Haptics.selectionAsync();
     quietUntil.current = Date.now() + 1500; // keep sonar quiet while the sample plays
     try {
-      await playUri(`${API_URL}/voices/${next.id}/sample.wav`, HEADERS);
+      await playUri(`${API_URL}/voices/${v.id}/sample.wav`, HEADERS);
     } catch (e) {
       console.warn(e);
     }
@@ -346,7 +457,7 @@ export default function App() {
     recentDirections.current = [];
     setSonarDistance(null);
     AccessibilityInfo.announceForAccessibility(on ? 'Sonar on' : 'Sonar off');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    buzz(Haptics.ImpactFeedbackStyle.Light);
     if (on) {
       sonarLoop();
       beepLoop();
@@ -398,7 +509,7 @@ export default function App() {
           if (failures === 3) {
             reading.current = null;
             setSonarDistance(null);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            notify(Haptics.NotificationFeedbackType.Error);
             AccessibilityInfo.announceForAccessibility('Sonar lost connection');
             Speech.speak('Sonar lost connection');
           }
@@ -420,8 +531,8 @@ export default function App() {
       }
       if (r.direction === 'ahead') {
         // Straight ahead: double beep in both ears, heavy buzz, and a spoken stop when very close.
-        toneAhead.seekTo(0).then(() => toneAhead.play()).catch(() => {});
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+        if (prefsRef.current.beeps) toneAhead.seekTo(0).then(() => toneAhead.play()).catch(() => {});
+        buzz(Haptics.ImpactFeedbackStyle.Heavy);
         if (r.distance <= STOP_DISTANCE_M && Date.now() - lastStopAt.current > STOP_REPEAT_MS) {
           lastStopAt.current = Date.now();
           tell(`Stop. Obstacle ahead, very close.${r.open ? ` More room on the ${r.open}.` : ''}`);
@@ -432,13 +543,13 @@ export default function App() {
           await sleep(320);
           const guide = r.open === 'left' ? toneLeft : toneRight;
           guide.volume = 0.35;
-          guide.seekTo(0).then(() => guide.play()).catch(() => {});
+          if (prefsRef.current.beeps) guide.seekTo(0).then(() => guide.play()).catch(() => {});
         }
       } else {
         const tone = r.direction === 'left' ? toneLeft : toneRight;
         tone.volume = 1;
-        tone.seekTo(0).then(() => tone.play()).catch(() => {});
-        Haptics.impactAsync(r.distance < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium);
+        if (prefsRef.current.beeps) tone.seekTo(0).then(() => tone.play()).catch(() => {});
+        buzz(r.distance < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium);
       }
       await sleep(beepGapMs(r.distance, modeRef.current));
     }
@@ -450,7 +561,7 @@ export default function App() {
       setStatus('capturing');
       quietUntil.current = Date.now() + 8000;
       tell('Scanning');
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await buzz(Haptics.ImpactFeedbackStyle.Light);
       // If sonar is mid-photo, wait for it; the camera takes one picture at a time.
       while (cameraBusy.current) await sleep(50);
       cameraBusy.current = true;
@@ -479,32 +590,99 @@ export default function App() {
         // Stronger buzz the closer the obstacle is.
         const style =
           data.distance_m < 1 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Medium;
-        await Haptics.impactAsync(style);
+        await buzz(style);
       }
       // Covers the moment before the clip starts; speaking() keeps sonar quiet until it ends.
       quietUntil.current = Date.now() + (data.audio_b64 ? 1500 : 3500);
-      await say(data);
+      if (prefsRef.current.speech) await say(data);
     } catch (e) {
       console.warn(e);
       setStatus('error');
       quietUntil.current = Date.now() + 2500;
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      await notify(Haptics.NotificationFeedbackType.Error);
       tell('No connection. Try again.');
     }
   }
 
-  const headline =
-    status === 'thinking' || status === 'capturing'
-      ? 'Checking…'
-      : status === 'error'
-        ? 'Could not reach the server'
+  const busy = status === 'thinking' || status === 'capturing';
+  const found = !sonarOn && resultVisible && result != null && !result.clear ? result : null;
+  const distance = sonarOn ? sonarDistance : (found?.distance_m ?? null);
+  const showNumber = !busy && status !== 'error' && distance != null;
+  // Read at render time; sonar re-renders whenever a new distance comes in.
+  const direction = sonarOn ? (reading.current?.direction ?? null) : (found?.direction ?? null);
+
+  const headline = busy
+    ? 'Checking…'
+    : status === 'error'
+      ? 'No connection'
+      : showNumber && distance != null
+        ? `${distance.toFixed(1)} m`
+        : sonarOn || (resultVisible && result?.clear)
+          ? 'Path clear'
+          : 'Ready';
+  const detail = busy
+    ? 'Hold still'
+    : status === 'error'
+      ? 'Tap to try again'
+      : showNumber
+        ? [direction && DIRECTION_WORD[direction], !sonarOn && found?.height ? `${found.height} height` : null]
+            .filter(Boolean)
+            .join(' · ')
         : sonarOn
-          ? sonarDistance != null
-            ? `${sonarDistance.toFixed(1)} m`
-            : 'Clear'
-          : result?.distance_m != null
-            ? `${result.distance_m.toFixed(1)} m`
-            : 'Tap anywhere';
+          ? 'Beeps start when something is close'
+          : resultVisible && result?.clear
+            ? 'Nothing in your path'
+            : 'Tap anywhere to describe';
+  const label = found?.label ? capitalize(found.label) : null;
+
+  // Where the obstacle box lands on screen: the 3:4 photo is scaled to cover the screen.
+  let box: { left: number; top: number; width: number; height: number } | null = null;
+  if (found?.box && !busy) {
+    const [x, y, w, h] = found.box;
+    const scale = Math.max(screenW / PHOTO_ASPECT, screenH); // displayed photo height
+    const photoW = scale * PHOTO_ASPECT;
+    const offX = (screenW - photoW) / 2;
+    const offY = (screenH - scale) / 2;
+    box = { left: offX + x * photoW, top: offY + y * scale, width: w * photoW, height: h * scale };
+  }
+
+  const topBar = (
+    <View style={styles.topBar} pointerEvents="box-none">
+      <Pressable
+        style={[styles.chip, !cameraPicture && styles.chipLarge]}
+        onPress={() => changeMode(mode === 'indoor' ? 'outdoor' : 'indoor')}
+        accessibilityRole="button"
+        accessibilityLabel={mode === 'indoor' ? 'Indoor' : 'Outdoor'}
+        accessibilityHint="Double tap to switch between indoor and outdoor"
+      >
+        <Text style={styles.chipText}>{mode === 'indoor' ? 'Indoor' : 'Outdoor'}</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.chip, !cameraPicture && styles.chipLarge]}
+        onPress={() => setShowSettings(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Settings"
+        accessibilityHint="Opens settings"
+      >
+        <Text style={styles.chipText}>Settings</Text>
+      </Pressable>
+    </View>
+  );
+
+  const sonarButton = (
+    <Pressable
+      style={[styles.sonar, sonarOn ? styles.sonarOn : styles.sonarOff, !cameraPicture && styles.sonarLarge]}
+      onPress={toggleSonar}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: sonarOn }}
+      accessibilityLabel="Sonar"
+      accessibilityHint="Beeps faster as you get closer to an obstacle"
+    >
+      <Text style={[styles.sonarText, sonarOn ? styles.sonarTextOn : styles.sonarTextOff]}>
+        {sonarOn ? 'Sonar on' : 'Sonar off'}
+      </Text>
+    </Pressable>
+  );
 
   return (
     <View
@@ -514,8 +692,10 @@ export default function App() {
         if (e.nativeEvent.actionName === 'magicTap') repeatLast();
       }}
     >
-      <StatusBar style="light" />
+      <StatusBar style={cameraPicture && !showSettings ? 'light' : 'dark'} />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
+      {/* Camera picture off: cover the preview. The camera still runs underneath. */}
+      {!cameraPicture ? <View style={styles.cover} pointerEvents="none" /> : null}
 
       {/* The whole screen is one big tap target. */}
       <Pressable
@@ -527,125 +707,157 @@ export default function App() {
         accessibilityState={{ busy: status === 'capturing' || status === 'thinking' }}
       />
 
-      <View style={styles.topBar} pointerEvents="box-none">
-        <Pressable
-          style={[styles.modeToggle, sonarOn && styles.toggleOn]}
-          onPress={toggleSonar}
-          accessibilityRole="switch"
-          accessibilityState={{ checked: sonarOn }}
-          accessibilityLabel="Sonar"
-          accessibilityHint="Beeps faster as you get closer to an obstacle"
-        >
-          <Text style={[styles.modeText, sonarOn && styles.toggleOnText]}>
-            {sonarOn ? 'SONAR ON' : 'SONAR OFF'}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={styles.modeToggle}
-          onPress={() => {
-            const next = mode === 'indoor' ? 'outdoor' : 'indoor';
-            modeRef.current = next;
-            setMode(next);
-          }}
-          accessibilityRole="switch"
-          accessibilityLabel={`${mode} mode`}
-          accessibilityHint="Double tap to switch between indoor and outdoor"
-        >
-          <Text style={styles.modeText}>{mode === 'indoor' ? 'INDOOR' : 'OUTDOOR'}</Text>
-        </Pressable>
-        {voices.length > 0 ? (
-          <Pressable
-            style={styles.modeToggle}
-            onPress={nextVoice}
-            accessibilityRole="button"
-            accessibilityLabel={`Voice, ${voices.find((v) => v.id === voiceId)?.name ?? 'default'}`}
-            accessibilityHint="Double tap to hear the next voice"
+      {cameraPicture ? (
+        <>
+          {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}
+          <View
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
           >
-            <Text style={styles.modeText}>
-              VOICE: {(voices.find((v) => v.id === voiceId)?.name ?? '').toUpperCase()}
-            </Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          style={[styles.modeToggle, cloneStep === 'recording' && styles.recording]}
-          onPress={cloneTap}
-          accessibilityRole="button"
-          accessibilityLabel={
-            cloneStep === 'recording'
-              ? 'Stop recording'
-              : cloneStep === 'uploading'
-                ? 'Adding the voice'
-                : cloneStep === 'confirm'
-                  ? 'Start recording a trusted voice'
-                  : 'Record a trusted voice'
-          }
-          accessibilityHint={
-            cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined
-          }
-          accessibilityState={{ busy: cloneStep === 'uploading' }}
-        >
-          <Text style={styles.modeText}>
-            {cloneStep === 'recording'
-              ? 'STOP'
-              : cloneStep === 'uploading'
-                ? 'ADDING…'
-                : cloneStep === 'confirm'
-                  ? 'TAP TO RECORD'
-                  : 'CLONE VOICE'}
-          </Text>
-        </Pressable>
-      </View>
+            <View style={styles.topShade} />
+            {box ? (
+              <>
+                <View style={[styles.box, box]} />
+                <View style={[styles.tag, { left: box.left, top: Math.max(110, box.top - 48) }]}>
+                  <Text style={styles.tagText}>
+                    {label ?? 'Obstacle'}
+                    {found?.distance_m != null ? ` · ${found.distance_m.toFixed(1)} m` : ''}
+                  </Text>
+                </View>
+              </>
+            ) : null}
+          </View>
+          {topBar}
+          <View style={styles.bottom} pointerEvents="box-none">
+            {/* Visual only (for sighted viewers and the projector). Everything here is also spoken. */}
+            <View
+              style={styles.card}
+              pointerEvents="none"
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              <Text style={[styles.headline, showNumber && styles.headlineNumber]}>
+                {headline}
+              </Text>
+              {detail ? <Text style={styles.detail}>{detail}</Text> : null}
+            </View>
+            {sonarButton}
+          </View>
+        </>
+      ) : (
+        <>
+          {topBar}
+          <View style={styles.large} pointerEvents="box-none">
+            <View
+              style={styles.largeMiddle}
+              pointerEvents="none"
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              {label && showNumber ? <Text style={styles.largeLabel}>{label}</Text> : null}
+              <Text
+                style={[styles.largeHeadline, showNumber && styles.largeNumber]}
+                adjustsFontSizeToFit
+                numberOfLines={1}
+              >
+                {headline}
+              </Text>
+              {detail ? <Text style={styles.largeDetail}>{detail}</Text> : null}
+              {showNumber && direction ? (
+                <Text style={styles.arrow}>
+                  {ARROW[direction]}
+                </Text>
+              ) : null}
+            </View>
+            {sonarButton}
+          </View>
+        </>
+      )}
 
-      {/* Visual only (for sighted viewers and the projector). Everything here is also spoken. */}
-      <View style={styles.bottomPanel} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <Text style={styles.distance}>{headline}</Text>
-        {!sonarOn && result?.sentence ? <Text style={styles.sentence}>{result.sentence}</Text> : null}
-      </View>
+      {showSettings ? (
+        <Settings
+          mode={mode}
+          onMode={changeMode}
+          cameraPicture={cameraPicture}
+          onCameraPicture={changeCameraPicture}
+          prefs={prefs}
+          onPrefs={updatePrefs}
+          voices={voices}
+          voiceId={voiceId}
+          onPickVoice={pickVoice}
+          cloneStep={cloneStep}
+          onClone={cloneTap}
+          onReplaySetup={replaySetup}
+          onClose={() => setShowSettings(false)}
+        />
+      ) : null}
     </View>
   );
 }
 
-const ACCENT = '#FFD60A';
-
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#000' },
-  center: { alignItems: 'center', justifyContent: 'center', padding: 24, gap: 24 },
-  title: { color: '#fff', fontSize: 28, fontWeight: '700', textAlign: 'center' },
-  button: { backgroundColor: ACCENT, paddingVertical: 18, paddingHorizontal: 32, borderRadius: 16 },
-  buttonText: { color: '#000', fontSize: 22, fontWeight: '700' },
+  blank: { backgroundColor: C.bg },
+  center: { alignItems: 'center', justifyContent: 'center', padding: 24, gap: 24, backgroundColor: C.bg },
+  title: { color: C.ink, fontSize: 30, textAlign: 'center', ...font('heavy') },
+  body: { color: C.ink2, fontSize: 20, textAlign: 'center', lineHeight: 28, ...font('regular') },
+  button: {
+    backgroundColor: C.blue,
+    minHeight: 80,
+    alignSelf: 'stretch',
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonText: { color: '#fff', fontSize: 26, ...font('bold') },
+  cover: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
+  topShade: { position: 'absolute', top: 0, left: 0, right: 0, height: 140, backgroundColor: 'rgba(0,0,0,0.3)' },
   topBar: {
     position: 'absolute',
-    top: 60,
-    left: 0,
-    right: 0,
+    top: 54,
+    left: 20,
+    right: 20,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
+    justifyContent: 'space-between',
   },
-  modeToggle: {
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    borderColor: ACCENT,
-    borderWidth: 2,
-    borderRadius: 999,
-    minHeight: 64,
-    justifyContent: 'center',
+  chip: {
+    minHeight: 48,
     paddingHorizontal: 20,
+    borderRadius: 24,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.92)',
   },
-  toggleOn: { backgroundColor: ACCENT },
-  recording: { borderColor: '#FF453A', backgroundColor: 'rgba(255,69,58,0.35)' },
-  toggleOnText: { color: '#000' },
-  modeText: { color: ACCENT, fontSize: 18, fontWeight: '800', letterSpacing: 2 },
-  bottomPanel: {
+  chipLarge: { backgroundColor: C.card, borderColor: C.border, borderWidth: 1.5 },
+  chipText: { color: C.ink, fontSize: 18, ...font('semibold') },
+  box: { position: 'absolute', borderWidth: 5, borderColor: C.bright, borderRadius: 18 },
+  tag: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    padding: 24,
-    paddingBottom: 48,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    justifyContent: 'center',
   },
-  distance: { color: ACCENT, fontSize: 64, fontWeight: '800' },
-  sentence: { color: '#fff', fontSize: 24, fontWeight: '600', marginTop: 8 },
+  tagText: { color: C.blue, fontSize: 20, ...font('bold') },
+  bottom: { position: 'absolute', left: 20, right: 20, bottom: 40, gap: 12 },
+  card: { backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 22, paddingHorizontal: 20, paddingVertical: 16 },
+  headline: { color: C.blue, fontSize: 34, ...font('bold') },
+  headlineNumber: { fontSize: 56, ...font('heavy') },
+  detail: { color: C.ink2, fontSize: 18, marginTop: 2, ...font('semibold') },
+  sonar: { minHeight: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center' },
+  sonarLarge: { minHeight: 96, borderRadius: 48 },
+  sonarOn: { backgroundColor: C.blue },
+  sonarOff: { backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 2, borderColor: C.blue },
+  sonarText: { fontSize: 26, ...font('bold') },
+  sonarTextOn: { color: '#fff' },
+  sonarTextOff: { color: C.blue },
+  large: { ...StyleSheet.absoluteFill, paddingTop: 130, paddingHorizontal: 20, paddingBottom: 40 },
+  largeMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  largeLabel: { color: C.ink, fontSize: 34, ...font('bold') },
+  largeHeadline: { color: C.blue, fontSize: 56, textAlign: 'center', ...font('heavy') },
+  largeNumber: { fontSize: 120 },
+  largeDetail: { color: C.ink, fontSize: 30, textAlign: 'center', ...font('bold') },
+  arrow: { color: C.ink, fontSize: 96, marginTop: 8, ...font('heavy') },
 });
