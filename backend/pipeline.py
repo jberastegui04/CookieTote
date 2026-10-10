@@ -294,7 +294,8 @@ def target_from(target: str | None, description: str | None) -> str | None:
 # Spoken requests come wrapped in filler ("can you find me the ... please"). Dropped from the ends so
 # the description is just the thing, which is what SigLIP matches best.
 REQUEST_LEAD = (
-    "please", "hey", "ok", "okay", "can you", "could you", "help me", "i want to", "i need to", "i want", "i need",
+    # "listening": VoiceOver's own announcement can end up at the start of the recording.
+    "listening", "please", "hey", "ok", "okay", "can you", "could you", "help me", "i want to", "i need to", "i want", "i need",
     "find me", "find", "look for", "looking for", "search for", "where is", "where's", "show me", "take me to",
     "the", "a", "an", "my", "some",
 )
