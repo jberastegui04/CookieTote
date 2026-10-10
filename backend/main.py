@@ -3,7 +3,7 @@ import io
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 import pipeline
 
@@ -15,7 +15,9 @@ async def read_image(image: UploadFile, mode: str) -> Image.Image:
     if mode not in ("indoor", "outdoor"):
         raise HTTPException(400, "mode must be indoor or outdoor")
     try:
-        return Image.open(io.BytesIO(await image.read())).convert("RGB")
+        img = Image.open(io.BytesIO(await image.read()))
+        # Phone photos can be stored sideways with a rotation tag. Apply it so up is up.
+        return ImageOps.exif_transpose(img).convert("RGB")
     except UnidentifiedImageError:
         raise HTTPException(400, "image must be a photo")
 
