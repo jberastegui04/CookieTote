@@ -18,15 +18,18 @@ DEPTH_MODELS = {
 # Everything below is in fractions of the image, since the depth map can be a different size than the photo.
 # Lane is the middle 60% of the width, split into three columns.
 COLUMNS = {"left": (0.2, 0.4), "ahead": (0.4, 0.6), "right": (0.6, 0.8)}
-# Top to bottom. Waist and foot overlap on purpose. Below 75% is ignored because the floor
-# fills the bottom of the frame at about 1 m when the phone is held forward (tune this).
-BANDS = {"head": (0.0, 1 / 3), "waist": (1 / 3, 2 / 3), "foot": (0.5, 0.75)}
+# Top to bottom, no overlap. Below 75% is ignored because the floor fills the bottom
+# of the frame at about 1 m when the phone is held forward (tune this).
+BANDS = {"head": (0.0, 1 / 3), "waist": (1 / 3, 0.5), "foot": (0.5, 0.75)}
 LANE_X = (0.2, 0.8)
 LANE_Y = (0.0, 0.75)
 # Low percentile instead of the minimum so a few noisy pixels can't trigger a warning.
 PERCENTILE = 5
 # Lane pixels this close to the obstacle distance count as part of it for the box.
 BOX_MARGIN_M = 0.3
+# The model reads phone photos too far away. Multiply by this to get real meters.
+# 1.0 until we calibrate against photos taken at measured distances.
+DEPTH_SCALE = {"indoor": 1.0, "outdoor": 1.0}
 
 # Load once at import so each request doesn't reload the model. Outdoor loads on first use.
 _depth_pipes = {"indoor": hf_pipeline("depth-estimation", model=DEPTH_MODELS["indoor"])}
@@ -37,7 +40,7 @@ def depth_map(image: Image.Image, mode: str) -> np.ndarray:
     if mode not in _depth_pipes:
         _depth_pipes[mode] = hf_pipeline("depth-estimation", model=DEPTH_MODELS[mode])
     out = _depth_pipes[mode](image)
-    return out["predicted_depth"].squeeze().cpu().numpy()
+    return out["predicted_depth"].squeeze().cpu().numpy() * DEPTH_SCALE[mode]
 
 
 def _rows(depth: np.ndarray, span: tuple[float, float]) -> slice:
@@ -118,7 +121,8 @@ def to_sentence(label: str | None, distance_m: float | None, direction: str | No
         return "Path clear"
     meters = round(distance_m * 2) / 2  # round to half meters
     unit = "meter" if meters == 1 else "meters"
-    where = {"left": "slightly left", "right": "slightly right"}.get(direction or "", "ahead")
+    # "1 meter ahead" reads as one phrase; "1 meter, slightly left" needs the pause.
+    where = {"left": ", slightly left", "right": ", slightly right"}.get(direction or "", " ahead")
     if label:
-        return f"{label.capitalize()}, about {meters:g} {unit}, {where}"
-    return f"Obstacle at {height} height, {meters:g} {unit} {where}"
+        return f"{label.capitalize()}, about {meters:g} {unit}{where}"
+    return f"Obstacle at {height} height, {meters:g} {unit}{where}"
