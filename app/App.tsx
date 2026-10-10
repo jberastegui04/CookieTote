@@ -104,11 +104,30 @@ const HEADERS: Record<string, string> = {
   ...(APP_KEY ? { 'X-App-Key': APP_KEY } : {}),
 };
 
-// Guide mode: a frame to /sonar about once a second, and a voice that speaks only when the
+// Guide mode: a frame to /sonar every GUIDE_PERIOD_MS at most, and a voice that speaks only when the
 // situation changes (open / far / close / stop, with a direction), plus a reminder now and then.
-const GUIDE_PERIOD_MS = 500;
+// 300 ms once capture got fast (small pictureSize); the GPU answers in about 0.1 s.
+const GUIDE_PERIOD_MS = 300;
 // Up to this many frames waiting on the server at once; answers older than the newest applied are dropped.
 const GUIDE_IN_FLIGHT = 2;
+// A frame stuck on the network longer than this is dropped; newer frames are already on their way.
+// Measured 18:46: the round trip is usually 0.3 s, but one in ten took about 3 s on venue Wi-Fi.
+const FRAME_TIMEOUT_MS = 2000;
+
+// Small 4:3 photos for the guide and Find. A full-size capture took about 0.7 s a frame (measured
+// 18:46), and the models only use about 500 px; 480 px wide reads the same distances as 768
+// (checked on the measured photos). 4:3 because the bearing math assumes that field of view.
+function pickFastSize(sizes: string[]): string | undefined {
+  if (sizes.includes('640x480')) return '640x480';
+  const fits = sizes
+    .map((s) => {
+      const m = s.match(/^(\d+)x(\d+)$/);
+      return m ? { s, a: Math.max(+m[1], +m[2]), b: Math.min(+m[1], +m[2]) } : null;
+    })
+    .filter((x): x is { s: string; a: number; b: number } => !!x && Math.abs(x.a / x.b - 4 / 3) < 0.02 && x.b >= 480 && x.a <= 1600)
+    .sort((x, y) => x.a * x.b - y.a * y.b);
+  return fits[0]?.s;
+}
 // Reminders while the situation hasn't changed: sooner when something is close.
 const GUIDE_REMIND_MS = 5000;
 const GUIDE_REMIND_CLOSE_MS = 2500;
@@ -285,6 +304,7 @@ export default function App() {
     AtkinsonHyperlegibleNext_800ExtraBold,
   });
   const cameraRef = useRef<CameraView>(null);
+  const [fastPictureSize, setFastPictureSize] = useState<string | undefined>(undefined);
   const player = useAudioPlayer(null);
   const lastClip = useRef<File | null>(null);
   const [mode, setMode] = useState<Mode>('auto');
@@ -1419,7 +1439,10 @@ export default function App() {
           // Sharper frames only in Search; in Approach the target is near and speed matters.
           const sharp =
             findOnRef.current && findPhaseRef.current === 'search' && findBlanks.current >= FIND_BLANKS_FOR_SHARP;
-          uri = await shrink(photo.uri, sharp ? FIND_SHARP_WIDTH_PX : SONAR_WIDTH_PX);
+          const width = sharp ? FIND_SHARP_WIDTH_PX : SONAR_WIDTH_PX;
+          // Already small (pictureSize): send as is. The server applies the rotation tag.
+          const small = photo.width && photo.height && Math.min(photo.width, photo.height) <= width;
+          uri = small ? photo.uri : await shrink(photo.uri, width);
           t2 = Date.now();
         } catch (e) {
           console.warn(e);
@@ -1437,8 +1460,10 @@ export default function App() {
           inFlight += 1;
           const sentAt = Date.now();
           const waiting = inFlight;
+          const abort = new AbortController();
+          const timer = setTimeout(() => abort.abort(), FRAME_TIMEOUT_MS);
           // Not awaited: the next capture starts while this one is on its way.
-          fetch(`${API_URL}${endpoint}`, { method: 'POST', body: form, headers: HEADERS })
+          fetch(`${API_URL}${endpoint}`, { method: 'POST', body: form, headers: HEADERS, signal: abort.signal })
             .then(async (res) => {
               if (!res.ok) throw new Error(`Server ${res.status}`);
               const data = (await res.json()) as T;
@@ -1456,6 +1481,7 @@ export default function App() {
               fail();
             })
             .finally(() => {
+              clearTimeout(timer);
               inFlight -= 1;
             });
         }
@@ -1727,7 +1753,20 @@ export default function App() {
       }}
     >
       <StatusBar style="light" />
-      <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
+      <CameraView
+        ref={cameraRef}
+        style={StyleSheet.absoluteFill}
+        facing="back"
+        animateShutter={false}
+        // Small photos while the guide or Find runs (see pickFastSize); describe taps get full size.
+        pictureSize={guideOn || findOn ? fastPictureSize : undefined}
+        onCameraReady={() => {
+          cameraRef.current
+            ?.getAvailablePictureSizesAsync()
+            .then((sizes) => setFastPictureSize(pickFastSize(sizes)))
+            .catch(() => {});
+        }}
+      />
       {/* Camera picture off: cover the preview. The camera still runs underneath. */}
       {!cameraPicture ? <View style={styles.cover} pointerEvents="none" /> : null}
 

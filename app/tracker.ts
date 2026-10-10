@@ -39,9 +39,19 @@ function blendFor(diff: number, noise: number, full: number) {
   return BLEND_MIN + t * (BLEND_MAX - BLEND_MIN);
 }
 // An answer's candidate is the same object if its center is within this of where the track
-// predicts it, and its size is within this ratio.
+// predicts it (or half the box's width, for big boxes), and its size is within this ratio.
+// Close up both get loose on purpose (Juan's analysis): a 20 cm sidestep at 1 m moves the object
+// 11 degrees without the phone turning (parallax), walking from 2 m to 1 m quadruples its area,
+// and boxes clipped at the frame edges swing their centers around.
 const GATE_DEG = 10;
-const GATE_SIZE_RATIO = 2.5;
+const GATE_SIZE_RATIO = 4;
+// Close or big: trust each answer as it comes (no smoothing toward the gyro guess). You're about to
+// arrive, and parallax makes the gyro guess wrong there anyway.
+const CLOSE_M = 1.5;
+const BIG_WIDTH = 0.5; // box wider than half the frame
+const CLOSE_GATE_DEG = 20;
+
+const isClose = (t: Track) => t.w > BIG_WIDTH || (t.distance !== null && t.distance < CLOSE_M);
 // A different object takes over only after this many answers in a row agree on it.
 const SWITCH_AFTER = 2;
 // Keep showing the box this long after the last match (gyro moves it), faded after STALE_MS.
@@ -68,7 +78,9 @@ function startTrack(c: Candidate, heading: number, now: number): Track {
 function cost(t: Track, c: Candidate, heading: number): number | null {
   const off = Math.abs(wrap(heading + c.bearing_deg - t.world));
   const size = Math.max(c.box[2] * c.box[3], 1e-6) / Math.max(t.w * t.h, 1e-6);
-  if (off > GATE_DEG || size > GATE_SIZE_RATIO || size < 1 / GATE_SIZE_RATIO) return null;
+  // Half the box width in degrees, and wider still close up, where a step sideways moves it a lot.
+  const gate = Math.max(isClose(t) ? CLOSE_GATE_DEG : GATE_DEG, (t.w * 2 * HALF_FOV_DEG) / 2);
+  if (off > gate || size > GATE_SIZE_RATIO || size < 1 / GATE_SIZE_RATIO) return null;
   return off + 10 * Math.abs(Math.log(size));
 }
 
@@ -90,14 +102,15 @@ export function trackUpdate(track: Track | null, candidates: Candidate[], headin
   }
   if (best) {
     const world = wrap(hd + best.bearing_deg);
-    const move = blendFor(Math.abs(wrap(world - track.world)), NOISE_DEG, FULL_DEG);
+    const close = isClose(track);
+    const move = close ? 1 : blendFor(Math.abs(wrap(world - track.world)), NOISE_DEG, FULL_DEG);
     // Size and height: same idea, in fractions of the frame (0.02 is jitter, 0.08 is a real change).
     const sizeDiff = Math.max(
       Math.abs(best.box[1] - track.y),
       Math.abs(best.box[2] - track.w),
       Math.abs(best.box[3] - track.h),
     );
-    const resize = blendFor(sizeDiff, 0.02, 0.08);
+    const resize = close ? 1 : blendFor(sizeDiff, 0.02, 0.08);
     return {
       world: wrap(track.world + move * wrap(world - track.world)),
       y: track.y + resize * (best.box[1] - track.y),
