@@ -19,7 +19,11 @@ Both endpoints: POST multipart with `image` (photo) and `mode` ("indoor" | "outd
 
 `POST /describe` returns `clear` (boolean), `sentence` (string), `label` (string | null), `distance_m` (number rounded to 0.5 | null), `direction` ("left" | "ahead" | "right" | null), `height` ("foot" | "waist" | "head" | null), `box` ([x, y, width, height], each 0 to 1 of the image | null), `audio_b64` (base64 ElevenLabs WAV | null; when null the app uses expo-speech). `main.py` adds `audio_b64`; the pipeline returns the rest.
 
+`POST /describe` also takes an optional `voice_id` form field (an id from `GET /voices`).
+
 `POST /sonar` returns `clear`, `distance_m`, `direction` only.
+
+`GET /voices` returns `default` (id) and `voices` ([{id, name}], cloned first). `GET /voices/{id}/sample.wav` returns a sample WAV. `POST /voices/clone` (form: `audio`, `consent=true`) makes one ElevenLabs instant clone, "Trusted voice", replacing the previous one; needs a paid ElevenLabs plan. Voice clips are cached by (voice_id, sentence).
 
 ## Models (Hugging Face, public, no token)
 - `depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf` and `...-Outdoor-Small-hf` for depth. Anything in a center lane closer than the warning distance counts, split into foot, waist, head bands.

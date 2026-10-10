@@ -2,10 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioRecorder,
+} from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Your laptop's address on the same Wi-Fi, set in app/.env (see README).
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
@@ -33,6 +40,14 @@ type SonarResult = {
 
 type Status = 'idle' | 'capturing' | 'thinking' | 'error';
 
+type Voice = { id: string; name: string };
+// Voice cloning: tap to hear the consent notice, tap again to record, tap again to stop and upload.
+type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
+const CLONE_MAX_MS = 30000;
+const VOICE_KEY = 'voice_id';
+// Free ngrok links answer with an HTML warning page unless this header is sent.
+const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+
 // Same warning distances as backend/pipeline.py.
 const WARN_DISTANCE_M: Record<Mode, number> = { indoor: 2, outdoor: 4 };
 const SONAR_PERIOD_MS = 1000;
@@ -55,6 +70,13 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('indoor');
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<DescribeResult | null>(null);
+  // Voice picker. The list comes from GET /voices; the choice is remembered on the phone.
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [voiceId, setVoiceId] = useState<string | null>(null);
+  const voiceIdRef = useRef<string | null>(null);
+  const [cloneStep, setCloneStep] = useState<CloneStep>('idle');
+  const cloneStepRef = useRef<CloneStep>('idle');
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   // Sonar. The loops below run for a long time, so they read refs instead of state.
   const [sonarOn, setSonarOn] = useState(false);
@@ -72,6 +94,22 @@ export default function App() {
   useEffect(() => {
     // Play warnings even when the phone's silent switch is on.
     setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+    AsyncStorage.getItem(VOICE_KEY)
+      .then((saved) => {
+        if (saved) {
+          voiceIdRef.current = saved;
+          setVoiceId(saved);
+        }
+      })
+      .catch(() => {});
+    loadVoices()
+      .then((data) => {
+        if (!voiceIdRef.current) {
+          voiceIdRef.current = data.default;
+          setVoiceId(data.default);
+        }
+      })
+      .catch(() => {});
     // Stop the sonar loops if the screen goes away.
     return () => {
       sonarOnRef.current = false;
@@ -96,6 +134,13 @@ export default function App() {
     );
   }
 
+  async function playUri(uri: string, headers?: Record<string, string>) {
+    player.replace({ uri, headers });
+    // Starting before the clip has loaded cuts off the first word.
+    for (let i = 0; i < 80 && !player.isLoaded; i++) await sleep(25);
+    player.play();
+  }
+
   // Plays the ElevenLabs clip if the backend sent one, otherwise the phone's built-in voice.
   async function say(data: DescribeResult) {
     if (data.audio_b64) {
@@ -105,10 +150,7 @@ export default function App() {
         const ext = data.audio_b64.startsWith('UklGR') ? 'wav' : 'mp3';
         const clip = new File(Paths.cache, `warning-${Date.now()}.${ext}`);
         clip.write(data.audio_b64, { encoding: 'base64' });
-        player.replace({ uri: clip.uri });
-        // Starting before the clip has loaded cuts off the first word.
-        for (let i = 0; i < 40 && !player.isLoaded; i++) await sleep(25);
-        player.play();
+        await playUri(clip.uri);
         if (lastClip.current?.exists) lastClip.current.delete();
         lastClip.current = clip;
         return;
@@ -117,6 +159,122 @@ export default function App() {
       }
     }
     Speech.speak(data.sentence);
+  }
+
+  function setClone(step: CloneStep) {
+    cloneStepRef.current = step;
+    setCloneStep(step);
+  }
+
+  async function loadVoices() {
+    const res = await fetch(`${API_URL}/voices`, { headers: HEADERS });
+    const data: { default: string; voices: Voice[] } = await res.json();
+    setVoices(data.voices);
+    return data;
+  }
+
+  function chooseVoice(v: Voice) {
+    voiceIdRef.current = v.id;
+    setVoiceId(v.id);
+    AsyncStorage.setItem(VOICE_KEY, v.id).catch(() => {});
+  }
+
+  // One button, three taps: consent notice, start recording, stop and upload.
+  async function cloneTap() {
+    const step = cloneStepRef.current;
+    if (step === 'uploading') return;
+    if (step === 'idle') {
+      setClone('confirm');
+      const notice =
+        'This records a trusted person for thirty seconds and makes a voice from it. ' +
+        'Only record someone who has agreed. Double tap again to start recording.';
+      AccessibilityInfo.announceForAccessibility(notice);
+      Speech.speak(notice);
+      setTimeout(() => {
+        if (cloneStepRef.current === 'confirm') setClone('idle');
+      }, 20000);
+      return;
+    }
+    if (step === 'confirm') {
+      Speech.stop();
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) {
+        setClone('idle');
+        Speech.speak('Microphone access is needed to record a voice.');
+        return;
+      }
+      if (sonarOnRef.current) toggleSonar();
+      try {
+        // iOS only records when the audio session allows it; turned back off after the recording.
+        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+      } catch (e) {
+        console.warn(e);
+        setClone('idle');
+        Speech.speak('Could not start recording.');
+        return;
+      }
+      setClone('recording');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AccessibilityInfo.announceForAccessibility('Recording. Speak naturally. Double tap to stop.');
+      setTimeout(() => {
+        if (cloneStepRef.current === 'recording') cloneTap();
+      }, CLONE_MAX_MS);
+      return;
+    }
+    // step === 'recording': stop and upload.
+    setClone('uploading');
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      if (!recorder.uri) throw new Error('No recording');
+      AccessibilityInfo.announceForAccessibility('Adding the voice, please wait.');
+      Speech.speak('Adding the voice, please wait.');
+      const form = new FormData();
+      form.append('audio', new File(recorder.uri));
+      form.append('consent', 'true');
+      const res = await fetch(`${API_URL}/voices/clone`, { method: 'POST', body: form, headers: HEADERS });
+      if (res.status === 422) {
+        // The backend explains why ElevenLabs refused this recording, in plain words.
+        const { detail } = await res.json();
+        throw new Error(String(detail), { cause: 'spoken' });
+      }
+      if (!res.ok) throw new Error(`Server ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const added: Voice = await res.json();
+      await loadVoices().catch(() => setVoices((prev) => [added, ...prev]));
+      chooseVoice(added);
+      setClone('idle');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AccessibilityInfo.announceForAccessibility('Voice added. Playing a sample.');
+      Speech.speak('Voice added.');
+      await sleep(1200);
+      await playUri(`${API_URL}/voices/${added.id}/sample.wav`, HEADERS);
+    } catch (e) {
+      console.warn(e);
+      setClone('idle');
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      const spoken = e instanceof Error && e.cause === 'spoken' ? e.message : 'Could not add the voice. Try again.';
+      AccessibilityInfo.announceForAccessibility(spoken);
+      Speech.speak(spoken);
+    }
+  }
+
+  // Steps to the next voice, plays its sample sentence, and remembers the choice.
+  async function nextVoice() {
+    if (voices.length === 0) return;
+    const i = voices.findIndex((v) => v.id === voiceIdRef.current);
+    const next = voices[(i + 1) % voices.length];
+    chooseVoice(next);
+    AccessibilityInfo.announceForAccessibility(`Voice: ${next.name}`);
+    Haptics.selectionAsync();
+    quietUntil.current = Date.now() + 1500; // keep sonar quiet while the sample plays
+    try {
+      await playUri(`${API_URL}/voices/${next.id}/sample.wav`, HEADERS);
+    } catch (e) {
+      console.warn(e);
+    }
   }
 
   function toggleSonar() {
@@ -153,11 +311,7 @@ export default function App() {
           const form = new FormData();
           form.append('image', new File(photo.uri));
           form.append('mode', modeRef.current);
-          const res = await fetch(`${API_URL}/sonar`, {
-            method: 'POST',
-            body: form,
-            headers: { 'ngrok-skip-browser-warning': 'true' },
-          });
+          const res = await fetch(`${API_URL}/sonar`, { method: 'POST', body: form, headers: HEADERS });
           if (!res.ok) throw new Error(`Server ${res.status}`);
           const data: SonarResult = await res.json();
           failures = 0;
@@ -222,13 +376,9 @@ export default function App() {
       // Expo's fetch rejects React Native's old { uri, name, type } parts; it needs a real File.
       form.append('image', new File(photo.uri));
       form.append('mode', mode);
+      if (voiceIdRef.current) form.append('voice_id', voiceIdRef.current);
 
-      const res = await fetch(`${API_URL}/describe`, {
-        method: 'POST',
-        body: form,
-        // Without this, ngrok's free plan can answer with an HTML warning page instead of our JSON.
-        headers: { 'ngrok-skip-browser-warning': 'true' },
-      });
+      const res = await fetch(`${API_URL}/describe`, { method: 'POST', body: form, headers: HEADERS });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       const data: DescribeResult = await res.json();
       setResult(data);
@@ -305,6 +455,47 @@ export default function App() {
         >
           <Text style={styles.modeText}>{mode === 'indoor' ? 'INDOOR' : 'OUTDOOR'}</Text>
         </Pressable>
+        {voices.length > 0 ? (
+          <Pressable
+            style={styles.modeToggle}
+            onPress={nextVoice}
+            accessibilityRole="button"
+            accessibilityLabel={`Voice, ${voices.find((v) => v.id === voiceId)?.name ?? 'default'}`}
+            accessibilityHint="Double tap to hear the next voice"
+          >
+            <Text style={styles.modeText}>
+              VOICE: {(voices.find((v) => v.id === voiceId)?.name ?? '').toUpperCase()}
+            </Text>
+          </Pressable>
+        ) : null}
+        <Pressable
+          style={[styles.modeToggle, cloneStep === 'recording' && styles.recording]}
+          onPress={cloneTap}
+          accessibilityRole="button"
+          accessibilityLabel={
+            cloneStep === 'recording'
+              ? 'Stop recording'
+              : cloneStep === 'uploading'
+                ? 'Adding the voice'
+                : cloneStep === 'confirm'
+                  ? 'Start recording a trusted voice'
+                  : 'Record a trusted voice'
+          }
+          accessibilityHint={
+            cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined
+          }
+          accessibilityState={{ busy: cloneStep === 'uploading' }}
+        >
+          <Text style={styles.modeText}>
+            {cloneStep === 'recording'
+              ? 'STOP'
+              : cloneStep === 'uploading'
+                ? 'ADDING…'
+                : cloneStep === 'confirm'
+                  ? 'TAP TO RECORD'
+                  : 'CLONE VOICE'}
+          </Text>
+        </Pressable>
       </View>
 
       <View style={styles.bottomPanel} pointerEvents="none">
@@ -331,8 +522,10 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 12,
+    paddingHorizontal: 16,
   },
   modeToggle: {
     backgroundColor: 'rgba(0,0,0,0.75)',
@@ -344,6 +537,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   toggleOn: { backgroundColor: ACCENT },
+  recording: { borderColor: '#FF453A', backgroundColor: 'rgba(255,69,58,0.35)' },
   toggleOnText: { color: '#000' },
   modeText: { color: ACCENT, fontSize: 18, fontWeight: '800', letterSpacing: 2 },
   bottomPanel: {

@@ -14,6 +14,8 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Limits.** This helps with stationary obstacles. It does not replace a cane, and outdoors it does not detect curbs, drop-offs, moving cars, or street crossings.
 
+**Trusted voice.** Record a family member or friend for 30 seconds, with their consent, and warnings play in their voice (ElevenLabs instant cloning). Four premade voices are offered too.
+
 **Built for VoiceOver.** Every element is labeled, every state is spoken or felt, and a two finger double tap (magic tap) repeats the last warning.
 
 ## How it works
@@ -44,7 +46,7 @@ Both endpoints take a POST with the photo as a form upload in a field called `im
 
 ### POST /describe
 
-Full result for describe mode. Slower, called once per tap.
+Full result for describe mode. Slower, called once per tap. Also takes an optional `voice_id` form field (one of the ids from `GET /voices`); if missing, the backend uses `ELEVENLABS_VOICE_ID` from `.env` or the first voice in the list.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -66,6 +68,18 @@ Fast result for sonar mode. Depth only, no detection, no speech. Called about on
 | `clear` | boolean | true if nothing is in the path |
 | `distance_m` | number or null | distance to the closest obstacle |
 | `direction` | string or null | `left`, `ahead`, or `right` |
+
+### GET /voices
+
+The voices the app offers, cloned ones first, for example `{"default": "EXAV…", "voices": [{"id": "EXAV…", "name": "Sarah"}, …]}`.
+
+### POST /voices/clone
+
+Form upload: `audio` (a recording of about 30 seconds, m4a or wav) and `consent`, which must be `true`. Makes an ElevenLabs instant clone named "Trusted voice", replacing the previous one, and returns `{"id", "name"}`. Needs an ElevenLabs plan that includes instant voice cloning (Starter or above); on the free plan ElevenLabs refuses and the endpoint returns 502 with the reason.
+
+### GET /voices/{voice_id}/sample.wav
+
+A WAV of a sample sentence in that voice, for the picker. Cached after the first call.
 
 ## Pipeline interface
 
@@ -177,6 +191,6 @@ Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backen
 - GoDaddy Registry domain
 - DEV Writing Challenge (after the event)
 
-**Stretch only.** Voice cloning so warnings use a trusted person's voice (with consent), live sonar with LiDAR on Pro iPhones, and a Tiger Data hazard map. Adobe Prettiest Hack if ahead.
+**Stretch only.** Live sonar with LiDAR on Pro iPhones, and a Tiger Data hazard map. Adobe Prettiest Hack if ahead.
 
 **How it's different.** Apple's distance features only work on Pro iPhones, and other apps only warn about things they can name. Ours works on any phone and warns about anything in your way.
