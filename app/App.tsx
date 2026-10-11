@@ -208,7 +208,8 @@ const DETOUR_CLEAR_FRAMES = 2;
 const DETOUR_STUCK_MS = 8000; // still blocked after this long: say to back up, and start over
 const DETOUR_STUCK_PHRASE = 'Still blocked. Back up a step.';
 // Find also says when something is ahead further out (the server reports up to about 3.5 m while
-// finding): once per distance step, held this long so it gets spoken, then back to the target.
+// finding): once per distance step, and nothing may talk over it until this long after the voice
+// started saying it; then back to the target.
 const FIND_AHEAD_HOLD_MS = 2500;
 const detourPhrase = (obstacle: Side, step: 'left' | 'right', stop: boolean) =>
   stop
@@ -389,7 +390,13 @@ export default function App() {
   const saidStandStill = useRef(false);
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const detourRef = useRef<Detour | null>(null); // stepping around something in Approach
-  const aheadWarned = useRef<{ key: string; at: number } | null>(null); // last "Something ahead, about 3 meters"
+  // Last "Something ahead, about 3 meters" in Find; spokenAt is null until voiceLoop has said it.
+  const aheadWarned = useRef<{ key: string; spokenAt: number | null } | null>(null);
+  // While this is true nothing else (target guidance, drift) may take the situation from it.
+  const aheadHoldLive = (now: number) => {
+    const w = aheadWarned.current;
+    return !!w && situation.current?.key === w.key && (w.spokenAt === null || now - w.spokenAt < FIND_AHEAD_HOLD_MS);
+  };
   const motionSub = useRef<{ remove: () => void } | null>(null);
   const arriveSound = useAudioPlayer(require('./assets/arrive.wav'));
   // Lock-on: a short rising two-note chime (G5, D6) when the tracker locks onto the target.
@@ -1153,7 +1160,9 @@ export default function App() {
           // Stepping around something: the step instruction is the only voice, and no pulses.
           await sleep(300);
           continue;
-        } else if (off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS) {
+        } else if (
+          off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS && !aheadHoldLive(now)
+        ) {
           // Drifted off the target: say where it is now, from the gyro, without waiting for a frame.
           const text = driftSentence(off);
           if (text && !(situation.current?.stop)) {
@@ -1354,10 +1363,10 @@ export default function App() {
     // warnings were noise. Something close (or a stop) starts a detour: step sideways, keep the
     // phone on the target, and turn back once the obstacle reads clear for a couple of answers.
     const o = data.obstacle;
-    // Walking during Search counts too: something ahead gets said even before the hand-off.
-    const walking = phase === 'approach' || movingSince.current !== null;
+    // Approach only: in Search the phone is swinging round, and a wall 3 m ahead would be
+    // announced mid-turn (movingSince trips on the swing, not just on walking).
     const reading =
-      walking && !o.clear && o.distance_m !== null
+      phase === 'approach' && !o.clear && o.distance_m !== null
         ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
         : null;
     const danger = phase === 'approach' && reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
@@ -1414,13 +1423,15 @@ export default function App() {
     if (reading && reading.key.startsWith('far:ahead')) {
       const warned = aheadWarned.current;
       if (!warned || warned.key !== reading.key) {
-        aheadWarned.current = { key: reading.key, at: now };
+        // spokenAt is filled in by voiceLoop once it has actually been said; until then (and for
+        // FIND_AHEAD_HOLD_MS after) nothing else may take the situation, or it would be lost.
+        aheadWarned.current = { key: reading.key, spokenAt: null };
         situation.current = reading;
         buzz(Haptics.ImpactFeedbackStyle.Medium);
         setFindInfo(data);
         return;
       }
-      if (now - warned.at < FIND_AHEAD_HOLD_MS) {
+      if (aheadHoldLive(now)) {
         setFindInfo(data);
         return;
       }
@@ -1620,8 +1631,15 @@ export default function App() {
         : s.key.startsWith('far')
           ? GUIDE_REMIND_MS
           : GUIDE_REMIND_CLOSE_MS;
+      // Said once, never reminded: the phase cues, and in Find the "Something ahead, about 3
+      // meters" warning (the hold already keeps it from being talked over).
       const oneShot =
-        s.key === 'handoff' || s.key === 'lost' || s.key === 'standstill' || s.key.startsWith('detour:clear') || s.key.startsWith('detour:stuck');
+        s.key === 'handoff' ||
+        s.key === 'lost' ||
+        s.key === 'standstill' ||
+        s.key.startsWith('detour:clear') ||
+        s.key.startsWith('detour:stuck') ||
+        (findOnRef.current && s.key.startsWith('far:'));
       const remind = s.key !== OPEN.key && !oneShot && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
         await sleep(100);
@@ -1629,6 +1647,7 @@ export default function App() {
       }
       lastKey = s.key;
       lastSpokenAt = Date.now();
+      if (aheadWarned.current && aheadWarned.current.key === s.key) aheadWarned.current.spokenAt = Date.now();
       setGuideText(s.text);
       await speakPhrase(s.text, s.stop);
     }
