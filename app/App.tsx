@@ -1444,7 +1444,18 @@ export default function App() {
       return;
     }
     if (state === 'thinking') return;
-    await walkerSession();
+    try {
+      await walkerSession();
+    } catch (e) {
+      // Nothing above catches this (it's called from a press handler), so a failed microphone,
+      // request or clip used to surface as an unhandled promise error and leave him stuck.
+      console.warn(e);
+      walkerHolds.current = false;
+      await micIdle();
+      setWalker('idle');
+      notify(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      tell(LINES.cantHear);
+    }
   }
 
   // Listens for one command and does it.
