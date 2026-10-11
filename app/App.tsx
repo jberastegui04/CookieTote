@@ -331,6 +331,14 @@ const FINDING_IT = 'Finding it. Turn slowly.';
 // while the target sits low (or high) in the picture, the voice says to tilt before it is gone; and if
 // it disappears right after sitting there, the voice says where it went instead of "No match yet".
 // Phrases are on the /say list (FRAMING_PHRASES in backend/main.py); change both together.
+// Left and right. The voice says what to do, in two sizes ("turn a little left" up to
+// FIND_SMALL_TURN_DEG, "turn left" beyond, same as find_sentence in pipeline.py), and the moment the
+// turn brings the target dead ahead it says LINED_UP_PHRASE, cutting the turn instruction that is now
+// out of date. No words can say how far to turn; this says when to stop. Both on the /say list.
+const FIND_SMALL_TURN_DEG = 15;
+const LINED_UP_PHRASE = 'Straight ahead.';
+const LINED_UP_EVERY_MS = 3000; // not more often than this, however the hand wobbles
+const TURN_WORDS = /turn (a little )?(left|right)|slightly (left|right)|o'clock/;
 type Tilt = 'up' | 'down';
 const TILT_START = 0.72; // box center this far down the picture (0 top, 1 bottom): tilt down. Mirrored for up.
 const TILT_STOP = 0.62; // keep saying it until the center is back inside this
@@ -564,6 +572,12 @@ export default function App() {
   const speakingStop = useRef(false);
   const speechToken = useRef(0);
   const speechCut = useRef(0); // bumped when a phrase is cut on purpose (a Stop), so its wait ends
+  const speakingText = useRef<string | null>(null); // what the voice is saying right now
+  const offCenter = useRef(false); // the target has been off to one side since the last "Straight ahead."
+  const linedUpAt = useRef(0);
+  // A server that hasn't been redeployed still says "slightly left"; the app matches it, so the two
+  // wordings (and the two voices: unknown phrases fall back to the phone's) are never mixed.
+  const oldWording = useRef(false);
   const [walkerState, setWalkerState] = useState<WalkerState>('idle');
   const walkerStateRef = useRef<WalkerState>('idle');
   const [walkerText, setWalkerText] = useState<string | null>(null);
@@ -1194,6 +1208,8 @@ export default function App() {
     aheadWarned.current = null;
     tiltRef.current = null;
     wentOff.current = null;
+    offCenter.current = false;
+    linedUpAt.current = 0;
     startHeading();
     const gen = ++findGen.current;
     frameLoop(
@@ -1207,6 +1223,7 @@ export default function App() {
     pulseLoop();
     const open = findOpenVocabRef.current;
     fetchPhrase(open ? 'No match yet. Turn slowly.' : `No ${target} yet. Turn slowly.`)
+      .then(() => fetchPhrase(LINED_UP_PHRASE))
       .then(() => fetchPhrase(HANDOFF_PHRASE))
       .then(() => fetchPhrase(arrivalPhrase(target, open)))
       .then(() => fetchPhrase(LOST_PHRASE))
@@ -1261,7 +1278,7 @@ export default function App() {
     situation.current = { key: 'lost', text: LOST_PHRASE, stop: false };
   }
 
-  // The last server sentence ("Door, slightly left, about 2 meters.") with its direction replaced by
+  // The last server sentence ("Door, turn a little left, about 2 meters.") with its direction replaced by
   // where the target is now, from the gyro. Keeps the server's exact distance wording, so the
   // result is still on the /say list.
   function driftSentence(off: number): string | null {
@@ -1269,7 +1286,16 @@ export default function App() {
     if (!base) return null;
     const parts = base.slice(0, -1).split(', ');
     if (parts.length !== 3) return base;
-    const where = Math.abs(off) <= FIND_AHEAD_DEG ? 'ahead' : off > 0 ? 'slightly right' : 'slightly left';
+    const side = off > 0 ? 'right' : 'left';
+    const a = Math.abs(off);
+    const where =
+      a <= FIND_AHEAD_DEG
+        ? 'ahead'
+        : oldWording.current
+          ? `slightly ${side}`
+          : a <= FIND_SMALL_TURN_DEG
+            ? `turn a little ${side}`
+            : `turn ${side}`;
     return `${parts[0]}, ${where}, ${parts[2]}.`;
   }
 
@@ -1665,6 +1691,26 @@ export default function App() {
       }
       const off = targetOffset();
       const now = Date.now();
+      // Lined up (see LINED_UP_PHRASE). Said straight away, not through the voice loop: it is only
+      // worth saying this instant. It cuts a turn instruction, and stays silent rather than talk over
+      // anything else (a Stop, a detour step, the tilt prompt).
+      if (off !== null && !detourRef.current) {
+        const a = Math.abs(off);
+        if (a > FIND_AHEAD_DEG) offCenter.current = true;
+        else if (a <= FIND_CENTERED_DEG && offCenter.current && now - linedUpAt.current > LINED_UP_EVERY_MS) {
+          offCenter.current = false;
+          const saying = speakingText.current;
+          if (!speechBusy.current || (saying !== null && TURN_WORDS.test(saying))) {
+            linedUpAt.current = now;
+            if (speechBusy.current) {
+              speechCut.current += 1;
+              player.pause();
+              Speech.stop();
+            }
+            speakPhrase(LINED_UP_PHRASE, false);
+          }
+        }
+      }
       if (findPhaseRef.current === 'search') {
         // How far they've turned without a sighting. Seen recently (or no gyro): start counting again.
         const h = headingRef.current;
@@ -1704,7 +1750,8 @@ export default function App() {
         const seenRecently = now - lastFoundAt.current <= HANDOFF_SEEN_WITHIN_MS;
         if (off !== null && seenRecently && Math.abs(off) <= FIND_AHEAD_DEG) {
           centeredSince.current ??= now;
-          if (now - centeredSince.current >= HANDOFF_CENTERED_MS) handoff();
+          // (Not on top of "Straight ahead."; it starts as soon as that has been said.)
+          if (now - centeredSince.current >= HANDOFF_CENTERED_MS && speakingText.current !== LINED_UP_PHRASE) handoff();
         } else {
           centeredSince.current = null;
         }
@@ -1811,6 +1858,7 @@ export default function App() {
     const token = ++speechToken.current;
     speechBusy.current = true;
     speakingStop.current = stop;
+    speakingText.current = text;
     try {
       const uri = prefsRef.current.speech ? await fetchPhrase(text) : null;
       if (uri) {
@@ -1847,6 +1895,7 @@ export default function App() {
       if (speechToken.current === token) {
         speechBusy.current = false;
         speakingStop.current = false;
+        speakingText.current = null;
       }
     }
   }
@@ -1934,6 +1983,7 @@ export default function App() {
     if (data.found && near !== null) {
       data = { ...data, distance_m: near, sentence: withHowFar(data.sentence, near, guideSettings().units ?? 'meters') };
     }
+    if (data.found) oldWording.current = data.sentence.includes('slightly') || (oldWording.current && !data.sentence.includes('turn '));
     // Up and down (see TILT_START). From the box actually seen in this frame.
     const seen = data.found ? (trackRef.current?.matched?.box ?? data.box) : null;
     if (seen) {
