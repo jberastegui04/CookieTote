@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, AppState, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, Animated, AppState, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -183,6 +183,13 @@ const clockPhrase = (target: string, offsetDeg: number, openVocab: boolean) => {
 const wrapDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180; // to (-180, 180]
 // Each gyro reading moves the heading this fraction of the way to the new value (1 = no smoothing).
 const HEADING_SMOOTHING = 0.5;
+// The heading is where the CAMERA points, worked out from all three of the motion sensor's angles.
+// It used to be the sensor's yaw alone, which is only that when the phone lies flat. Held upright,
+// the way Find is used, yaw also swings when the phone tips sideways like a steering wheel: 5 degrees
+// of wrist reads as a 14 degree turn with the phone at 70 degrees, 27 at 80. The camera hasn't turned
+// at all, but the box slid across the screen and the voice said "slightly left". And tipped back past
+// upright (camera pointing a little up) yaw flips by 180. Set to false to go back to yaw alone.
+const HEADING_FROM_CAMERA = true;
 // Find runs in two phases. SEARCH: standing still and turning; only the target is spoken, and
 // obstacles are ignored (false "Stop"s while turning on the spot were confusing). APPROACH: walking
 // toward it; something close starts a detour (see Detour below), otherwise target drift. Phrases
@@ -450,6 +457,7 @@ export default function App() {
   const findOnRef = useRef(false);
   const findTargetRef = useRef<string | null>(null);
   const headingRef = useRef<number | null>(null); // phone heading in degrees, clockwise, from the gyro
+  const yawFix = useRef(0); // radians added to the sensor's yaw to get the camera's heading (HEADING_FROM_CAMERA)
   const [headingNow, setHeadingNow] = useState<number | null>(null); // same, as state, so the screen follows the turn
   const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
   const trackRef = useRef<Track | null>(null); // the object Find is following (tracker.ts)
@@ -1524,6 +1532,7 @@ export default function App() {
   // Gyro heading while Find is on. Degrees, clockwise, relative (no compass needed).
   async function startHeading() {
     headingRef.current = null;
+    yawFix.current = 0;
     try {
       if (!(await DeviceMotion.isAvailableAsync())) return;
       // 20 readings a second; FindScreen glides the box between them so it moves smoothly.
@@ -1536,7 +1545,15 @@ export default function App() {
           else movingSince.current = null;
         }
         if (m.rotation) {
-          const raw = -YAW_SIGN * (m.rotation.alpha * 180) / Math.PI;
+          // On iOS alpha, beta, gamma are yaw (about vertical), pitch and roll, applied in that
+          // order. The camera looks out of the back of the phone; its compass direction is yaw
+          // plus this term. Pointing almost straight down it has no direction, so the last one holds.
+          if (HEADING_FROM_CAMERA && Platform.OS === 'ios') {
+            const side = Math.sin(m.rotation.gamma);
+            const forward = Math.sin(m.rotation.beta) * Math.cos(m.rotation.gamma);
+            if (Math.hypot(side, forward) > 0.3) yawFix.current = Math.atan2(side, forward);
+          }
+          const raw = -YAW_SIGN * ((m.rotation.alpha + yawFix.current) * 180) / Math.PI;
           const prev = headingRef.current;
           // Light smoothing takes the hand shake out of the box without noticeable lag.
           headingRef.current = prev === null ? raw : wrapDeg(prev + HEADING_SMOOTHING * wrapDeg(raw - prev));
