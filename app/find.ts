@@ -42,16 +42,31 @@ const SYNONYMS: Record<string, string> = {
   sofa: 'couch', fridge: 'refrigerator', bag: 'backpack', mug: 'cup', computer: 'laptop',
   desk: 'table', man: 'person', woman: 'person', guy: 'person', girl: 'person', boy: 'person',
   someone: 'person', people: 'person', kid: 'person', child: 'person', seat: 'chair',
+  tv: 'television', telly: 'television', macbook: 'laptop', cellphone: 'phone', iphone: 'phone',
+  smartphone: 'phone', mobile: 'phone', purse: 'handbag', luggage: 'suitcase', bike: 'bicycle',
+  motorbike: 'motorcycle', puppy: 'dog', kitten: 'cat', kitty: 'cat', flower: 'plant',
+  flowers: 'plant', racket: 'tennis racket', bat: 'baseball bat', glove: 'baseball glove',
+  hairdryer: 'hair dryer', dryer: 'hair dryer', glass: 'cup',
+  'remote control': 'remote', 'cell phone': 'phone', 'stuffed animal': 'teddy bear', 'potted plant': 'plant',
+  'dining table': 'table', 'sports ball': 'ball', 'hair drier': 'hair dryer', 'wine glass': 'wine glass',
 };
 
 // Which target a description names, the same way the server reads it (target_from in pipeline.py):
-// the first known object word, after synonyms and plurals. Null if it names none.
+// the first known object name (two-word names first, then single words), after synonyms and
+// plurals. Null if it names none.
 export function targetFromDescription(description: string, targets: string[]): string | null {
-  for (const raw of description.toLowerCase().replace(/,/g, ' ').split(/\s+/)) {
-    const cleaned = raw.replace(/^[.!?'"]+|[.!?'"]+$/g, '');
-    const word = SYNONYMS[cleaned] ?? cleaned;
-    if (targets.includes(word)) return word;
-    if (word.endsWith('s') && targets.includes(word.slice(0, -1))) return word.slice(0, -1);
+  const words = description
+    .toLowerCase()
+    .replace(/,/g, ' ')
+    .split(/\s+/)
+    .map((raw) => raw.replace(/^[.!?'"]+|[.!?'"]+$/g, ''));
+  for (let i = 0; i < words.length; i++) {
+    const tries = i + 1 < words.length ? [`${words[i]} ${words[i + 1]}`, words[i]] : [words[i]];
+    for (const raw of tries) {
+      const word = SYNONYMS[raw] ?? raw;
+      if (targets.includes(word)) return word;
+      if (word.endsWith('s') && targets.includes(word.slice(0, -1))) return word.slice(0, -1);
+    }
   }
   return null;
 }

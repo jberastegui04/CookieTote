@@ -265,10 +265,40 @@ def _sonar_result(depth: np.ndarray, warn_m: float) -> dict:
 
 # Find mode. Spoken name -> DETR label. Only things DETR reliably detects; its label list also has
 # "door", "desk" and "window", but COCO never trained them, so those wait for an open-vocabulary model.
+# Spoken name -> DETR label. Every class DETR was trained on (COCO's 80, minus "orange": as a color
+# word it would hijack "find the orange chair"). DETR's config also lists door, desk, window, mirror
+# and a few more, but it never predicts them (no COCO annotations), so they go to the open-vocabulary
+# detector like anything else not listed here.
 FIND_TARGETS = {
-    "chair": "chair", "bench": "bench", "couch": "couch", "table": "dining table", "person": "person",
-    "toilet": "toilet", "sink": "sink", "refrigerator": "refrigerator", "microwave": "microwave",
-    "laptop": "laptop", "backpack": "backpack", "bottle": "bottle", "cup": "cup",
+    # Furniture and rooms
+    "chair": "chair", "bench": "bench", "couch": "couch", "table": "dining table", "bed": "bed",
+    "plant": "potted plant", "toilet": "toilet", "sink": "sink",
+    # Kitchen
+    "refrigerator": "refrigerator", "microwave": "microwave", "oven": "oven", "toaster": "toaster",
+    "bottle": "bottle", "cup": "cup", "wine glass": "wine glass", "bowl": "bowl",
+    "fork": "fork", "knife": "knife", "spoon": "spoon",
+    # Electronics
+    "laptop": "laptop", "television": "tv", "keyboard": "keyboard", "mouse": "mouse",
+    "remote": "remote", "phone": "cell phone",
+    # Around the house
+    "book": "book", "clock": "clock", "vase": "vase", "scissors": "scissors", "teddy bear": "teddy bear",
+    "hair dryer": "hair drier", "toothbrush": "toothbrush",
+    # Carried
+    "backpack": "backpack", "handbag": "handbag", "suitcase": "suitcase", "umbrella": "umbrella", "tie": "tie",
+    # People and animals
+    "person": "person", "dog": "dog", "cat": "cat", "bird": "bird", "horse": "horse", "sheep": "sheep",
+    "cow": "cow", "elephant": "elephant", "bear": "bear", "zebra": "zebra", "giraffe": "giraffe",
+    # Outside
+    "bicycle": "bicycle", "car": "car", "motorcycle": "motorcycle", "bus": "bus", "train": "train",
+    "truck": "truck", "boat": "boat", "airplane": "airplane", "traffic light": "traffic light",
+    "fire hydrant": "fire hydrant", "stop sign": "stop sign", "parking meter": "parking meter",
+    # Sports
+    "ball": "sports ball", "frisbee": "frisbee", "kite": "kite", "skateboard": "skateboard",
+    "surfboard": "surfboard", "skis": "skis", "snowboard": "snowboard", "baseball bat": "baseball bat",
+    "baseball glove": "baseball glove", "tennis racket": "tennis racket",
+    # Food
+    "banana": "banana", "apple": "apple", "sandwich": "sandwich", "pizza": "pizza", "donut": "donut",
+    "cake": "cake", "hot dog": "hot dog", "broccoli": "broccoli", "carrot": "carrot",
 }
 # A phone's main camera held upright sees about 52 degrees across, so the frame edge is about 26 degrees off center.
 CAMERA_HALF_FOV_DEG = 26
@@ -280,6 +310,14 @@ FIND_SYNONYMS = {
     "sofa": "couch", "fridge": "refrigerator", "bag": "backpack", "mug": "cup", "computer": "laptop",
     "desk": "table", "man": "person", "woman": "person", "guy": "person", "girl": "person", "boy": "person",
     "someone": "person", "people": "person", "kid": "person", "child": "person", "seat": "chair",
+    "tv": "television", "telly": "television", "macbook": "laptop", "cellphone": "phone", "iphone": "phone",
+    "smartphone": "phone", "mobile": "phone", "purse": "handbag", "luggage": "suitcase", "bike": "bicycle",
+    "motorbike": "motorcycle", "puppy": "dog", "kitten": "cat", "kitty": "cat", "flower": "plant",
+    "flowers": "plant", "racket": "tennis racket", "bat": "baseball bat", "glove": "baseball glove",
+    "hairdryer": "hair dryer", "dryer": "hair dryer", "glass": "cup",
+    # Two-word phrases are checked before single words, so "remote control" doesn't become "remote" twice.
+    "remote control": "remote", "cell phone": "phone", "stuffed animal": "teddy bear", "potted plant": "plant",
+    "dining table": "table", "sports ball": "ball", "hair drier": "hair dryer", "wine glass": "wine glass",
 }
 
 # Describe-and-match: DETR finds every candidate of the noun, then SigLIP scores each crop against the
@@ -350,13 +388,15 @@ def target_from(target: str | None, description: str | None) -> str | None:
     """The FIND_TARGETS name to look for: the picked target, else the first one named in the description."""
     if target:
         return target if target in FIND_TARGETS else None
-    for word in (description or "").lower().replace(",", " ").split():
-        word = word.strip(".!?'\"")
-        word = FIND_SYNONYMS.get(word, word)
-        if word in FIND_TARGETS:
-            return word
-        if word.endswith("s") and word[:-1] in FIND_TARGETS:  # "chairs"
-            return word[:-1]
+    words = [w.strip(".!?'\"") for w in (description or "").lower().replace(",", " ").split()]
+    for i, word in enumerate(words):
+        # Two-word names first ("teddy bear", "cell phone"), then the word on its own.
+        for candidate in ([f"{word} {words[i + 1]}"] if i + 1 < len(words) else []) + [word]:
+            candidate = FIND_SYNONYMS.get(candidate, candidate)
+            if candidate in FIND_TARGETS:
+                return candidate
+            if candidate.endswith("s") and candidate[:-1] in FIND_TARGETS:  # "chairs"
+                return candidate[:-1]
     return None
 
 
