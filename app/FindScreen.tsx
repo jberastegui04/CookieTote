@@ -83,16 +83,21 @@ export default function FindScreen(p: Props) {
   const arrow = !p.paused && found && r.direction ? ARROW[r.direction] : null;
   const distance = found && r.distance_m != null ? `${formatDistance(r.distance_m, p.units)} away` : null;
 
-  // Bearing meter: where the target sits left to right, from -26 to 26 degrees.
+  // The 3:4 photo is scaled to cover the screen, so a tall phone shows only the middle of what
+  // the camera sees (about 60% of its width).
+  const scale = Math.max(screenW / PHOTO_ASPECT, screenH);
+  const photoW = scale * PHOTO_ASPECT;
+  // Bearing meter: where the target sits left to right. Its ends are the edges of the screen, so
+  // the dot reaches an end just as the box's center reaches that edge. (It used to span the camera's
+  // whole view, 26 degrees each way, so the box left the screen with the dot only part way along.)
+  const edgeDeg = HALF_FOV_DEG * Math.min(1, screenW / photoW);
   const bearing = found && r.bearing_deg != null ? r.bearing_deg : null;
-  const dotFrac = bearing == null ? 0.5 : Math.min(1, Math.max(0, (bearing + HALF_FOV_DEG) / (2 * HALF_FOV_DEG)));
+  const dotFrac = bearing == null ? 0.5 : Math.min(1, Math.max(0, (bearing + edgeDeg) / (2 * edgeDeg)));
 
   // Outline the target on the camera view, same mapping as the obstacle box.
   let box: { left: number; top: number; width: number; height: number } | null = null;
   if (p.cameraPicture && found && r.box) {
     const [x, y, w, h] = r.box;
-    const scale = Math.max(screenW / PHOTO_ASPECT, screenH);
-    const photoW = scale * PHOTO_ASPECT;
     const offX = (screenW - photoW) / 2;
     const offY = (screenH - scale) / 2;
     box = { left: offX + x * photoW, top: offY + y * scale, width: w * photoW, height: h * scale };
