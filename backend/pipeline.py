@@ -483,7 +483,9 @@ def _find_how_far(distance: float, units: str = "meters") -> str:
 
 # Find tells the user what to do, in two sizes: up to this many degrees off is "turn a little left",
 # beyond it (out to the edge of the frame) "turn left". "Slightly left" said where the target was, not
-# what to do, and gave no idea of how much. Mirrored in driftSentence() in app/App.tsx.
+# what to do, and gave no idea of how much. The distance is its own instruction ("... and walk about
+# 2 meters"): with only a comma between them it was heard as "turn left about 2 meters".
+# Mirrored in findSentence() in app/App.tsx.
 FIND_SMALL_TURN_DEG = 15
 
 
@@ -496,9 +498,14 @@ def find_sentence(
     arbitrary text."""
     if direction is None or distance is None:
         return "No match yet. Turn slowly." if match else f"No {target} yet. Turn slowly."
-    where = "ahead" if direction not in ("left", "right") else f"turn a little {direction}" if small else f"turn {direction}"
     name = {"yes": "Found it", "possible": "Possible match"}.get(match or "", target.capitalize())
-    return f"{name}, {where}, {_find_how_far(distance, units)}."
+    far = _find_how_far(distance, units)
+    if direction not in ("left", "right"):
+        return f"{name}, ahead, {far}."
+    turn = f"turn a little {direction}" if small else f"turn {direction}"
+    if far == "very close":
+        return f"{name}, very close, {turn}."
+    return f"{name}, {turn} and walk {far}."
 
 
 def find_phrases() -> set[str]:

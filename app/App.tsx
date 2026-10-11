@@ -338,7 +338,7 @@ const FINDING_IT = 'Finding it. Turn slowly.';
 const FIND_SMALL_TURN_DEG = 15;
 const LINED_UP_PHRASE = 'Straight ahead.';
 const LINED_UP_EVERY_MS = 3000; // not more often than this, however the hand wobbles
-const TURN_WORDS = /turn (a little )?(left|right)|slightly (left|right)|o'clock/;
+const TURN_WORDS = /turn (a little )?(left|right)|slightly (left|right)|o'clock/; // an instruction to turn
 type Tilt = 'up' | 'down';
 const TILT_START = 0.72; // box center this far down the picture (0 top, 1 bottom): tilt down. Mirrored for up.
 const TILT_STOP = 0.62; // keep saying it until the center is back inside this
@@ -360,9 +360,45 @@ function howFar(meters: number, units: Units): string {
   return `about ${m} ${m === 1 ? 'meter' : 'meters'}`;
 }
 // "Found it, ahead, about 2 meters." with its distance replaced.
-function withHowFar(sentence: string, meters: number, units: Units): string {
-  const parts = sentence.slice(0, -1).split(', ');
-  return parts.length === 3 ? `${parts[0]}, ${parts[1]}, ${howFar(meters, units)}.` : sentence;
+// The server's Find sentence (find_sentence in backend/pipeline.py), taken apart and put back
+// together, so the app can change the direction (from the gyro) or the distance (from the box) and
+// still say something on the /say list. Three wordings exist, newest first; the app answers in
+// whichever one the server it is talking to uses, so wordings (and voices) are never mixed:
+//   walk      "Chair, turn a little left and walk about 2 meters."  /  "Chair, very close, turn left."
+//   comma     "Chair, turn left, about 2 meters."   (was heard as "turn left about 2 meters")
+//   slightly  "Chair, slightly left, about 2 meters."
+// Straight ahead is the same in all three: "Chair, ahead, about 2 meters."
+type Wording = 'walk' | 'comma' | 'slightly';
+type FindParts = { name: string; side: 'left' | 'right' | null; small: boolean; far: string };
+function wordingOf(sentence: string): Wording | null {
+  if (sentence.includes('slightly ')) return 'slightly';
+  if (sentence.includes(' and walk ') || /, very close, turn /.test(sentence)) return 'walk';
+  if (/, turn [a-z ]+, /.test(sentence)) return 'comma';
+  return null; // "ahead", or not a sighting: says nothing about the wording
+}
+function parseFind(sentence: string): FindParts | null {
+  const comma = sentence.indexOf(', ');
+  const far = sentence.match(/very close|(?:about|more than) [\d.]+ (?:meters?|feet|foot)/);
+  if (comma < 0 || !far) return null;
+  const side = sentence.match(/\b(left|right)\b/);
+  return {
+    name: sentence.slice(0, comma),
+    side: side ? (side[1] as 'left' | 'right') : null,
+    small: /a little |slightly /.test(sentence),
+    far: far[0],
+  };
+}
+function findSentence(p: FindParts, wording: Wording): string {
+  if (!p.side) return `${p.name}, ahead, ${p.far}.`;
+  if (wording === 'slightly') return `${p.name}, slightly ${p.side}, ${p.far}.`;
+  const turn = p.small ? `turn a little ${p.side}` : `turn ${p.side}`;
+  if (wording === 'comma') return `${p.name}, ${turn}, ${p.far}.`;
+  return p.far === 'very close' ? `${p.name}, very close, ${turn}.` : `${p.name}, ${turn} and walk ${p.far}.`;
+}
+// A Find sentence with its distance replaced.
+function withHowFar(sentence: string, meters: number, units: Units, wording: Wording): string {
+  const p = parseFind(sentence);
+  return p ? findSentence({ ...p, far: howFar(meters, units) }, wordingOf(sentence) ?? wording) : sentence;
 }
 // An obstacle in the target's direction, no nearer than the target less this, is the target
 // (FIND_SELF_M in pipeline.py; the app repeats the check once it has corrected the distance).
@@ -577,7 +613,7 @@ export default function App() {
   const linedUpAt = useRef(0);
   // A server that hasn't been redeployed still says "slightly left"; the app matches it, so the two
   // wordings (and the two voices: unknown phrases fall back to the phone's) are never mixed.
-  const oldWording = useRef(false);
+  const wording = useRef<Wording>('walk');
   const [walkerState, setWalkerState] = useState<WalkerState>('idle');
   const walkerStateRef = useRef<WalkerState>('idle');
   const [walkerText, setWalkerText] = useState<string | null>(null);
@@ -1284,19 +1320,11 @@ export default function App() {
   function driftSentence(off: number): string | null {
     const base = lastSentence.current;
     if (!base) return null;
-    const parts = base.slice(0, -1).split(', ');
-    if (parts.length !== 3) return base;
-    const side = off > 0 ? 'right' : 'left';
+    const p = parseFind(base);
+    if (!p) return base;
     const a = Math.abs(off);
-    const where =
-      a <= FIND_AHEAD_DEG
-        ? 'ahead'
-        : oldWording.current
-          ? `slightly ${side}`
-          : a <= FIND_SMALL_TURN_DEG
-            ? `turn a little ${side}`
-            : `turn ${side}`;
-    return `${parts[0]}, ${where}, ${parts[2]}.`;
+    const side = a <= FIND_AHEAD_DEG ? null : off > 0 ? 'right' : 'left';
+    return findSentence({ ...p, side, small: a <= FIND_SMALL_TURN_DEG }, wording.current);
   }
 
   // Walker has the floor: he's listening, thinking or talking, or someone has started talking to him
@@ -1981,9 +2009,9 @@ export default function App() {
     // the sentence, the arrival check, and the "is that obstacle just the target" check below.
     const near = trackRef.current?.matched === candidates[0] ? (trackRef.current?.near ?? null) : null;
     if (data.found && near !== null) {
-      data = { ...data, distance_m: near, sentence: withHowFar(data.sentence, near, guideSettings().units ?? 'meters') };
+      data = { ...data, distance_m: near, sentence: withHowFar(data.sentence, near, guideSettings().units ?? 'meters', wording.current) };
     }
-    if (data.found) oldWording.current = data.sentence.includes('slightly') || (oldWording.current && !data.sentence.includes('turn '));
+    if (data.found) wording.current = wordingOf(data.sentence) ?? wording.current;
     // Up and down (see TILT_START). From the box actually seen in this frame.
     const seen = data.found ? (trackRef.current?.matched?.box ?? data.box) : null;
     if (seen) {
