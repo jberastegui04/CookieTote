@@ -230,6 +230,8 @@ def _obstacle_detection(
     if detections is None:
         detections = _detector(image, threshold=DETECT_THRESHOLD)
     for det in detections:
+        if det["score"] < DETECT_THRESHOLD:  # describe() runs the detector lower, for its scene list
+            continue
         b = det["box"]
         x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
         inter = max(0.0, min(x1, bx1) - max(x0, bx0)) * max(0.0, min(y1, by1) - max(y0, by0))
@@ -251,7 +253,7 @@ def describe(image: Image.Image, mode: str, warning: str = "normal", units: str 
     """The safety answer first (the nearest obstacle, or "Path ahead looks open."), then up to
     SCENE_MAX_OBJECTS other things the detector is sure of, nearest first: "I also see a table on your
     left, about 3 meters, and two people on your right, about 2 meters." """
-    detect_job = _parallel.submit(_detector, image, threshold=DETECT_THRESHOLD)
+    detect_job = _parallel.submit(_detector, image, threshold=min(DETECT_THRESHOLD, SCENE_BIG_THRESHOLD))
     depth = depth_map(image, mode)
     detections = detect_job.result()
     hit = find_obstacle(depth, warn_distance(mode, warning))
@@ -286,14 +288,16 @@ def describe(image: Image.Image, mode: str, warning: str = "normal", units: str 
     }
 
 
-# Describe's scene list. Only detections at least this sure (real objects in the venue photos scored
-# 0.98-1.0; most false ones are under 0.9), at most this many groups, nearest first.
+# Describe's scene list: at most this many groups, nearest first, at any distance (a TV across a
+# hallway is worth naming). A detection counts at SCENE_THRESHOLD, or from SCENE_BIG_THRESHOLD when
+# its box covers SCENE_BIG_AREA of the picture: in the venue photos the big ones between those scores
+# were real (a TV 7 m away at 0.63, tables, bicycles) and the junk was all tiny (cups, a toothbrush).
 SCENE_THRESHOLD = 0.9
+SCENE_BIG_THRESHOLD = 0.6
+SCENE_BIG_AREA = 0.015
 SCENE_MAX_OBJECTS = 3
 # Within this many degrees of straight ahead is "ahead" (the lane's middle column is about +-5).
 SCENE_AHEAD_DEG = 8
-# Farther than this isn't listed: not much use when you're about to walk, and depth is shakier there.
-SCENE_MAX_M = 8
 NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five"}
 PLURALS = {
     "person": "people", "bus": "buses", "bench": "benches", "couch": "couches", "glass": "glasses",
@@ -320,13 +324,13 @@ def scene_objects(
     if skip_direction is None:
         skip_spot = None
     for det in detections:
-        if det is skip or det["score"] < SCENE_THRESHOLD:
+        if det is skip or det["score"] < SCENE_BIG_THRESHOLD:
             continue
         spot = _locate(det["box"], det["score"], w, h, depth)
         if spot["_distance"] is None:
             continue
-        if spot["_distance"] > SCENE_MAX_M:
-            continue
+        if det["score"] < SCENE_THRESHOLD and spot["box"][2] * spot["box"][3] < SCENE_BIG_AREA:
+            continue  # not sure enough for something this small
         name = spoken.get(det["label"], LABEL_NAMES.get(det["label"], det["label"]))
         bearing = spot["bearing_deg"]
         direction = "ahead" if abs(bearing) <= SCENE_AHEAD_DEG else "right" if bearing > 0 else "left"
