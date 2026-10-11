@@ -89,6 +89,8 @@ type Voice = { id: string; name: string; custom?: boolean }; // custom: a truste
 // Voice cloning: tap to hear the consent notice, tap again to record, tap again to stop and upload.
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 const CLONE_MAX_MS = 30000;
+// Said (without VoiceOver) just before a voice recording starts. On the /say list in backend/main.py.
+const CLONE_RECORDING_CUE = 'Recording. Speak naturally. Tap again to stop.';
 const VOICE_KEY = 'voice_id';
 const MODE_KEY = 'mode';
 const CAMERA_KEY = 'camera_picture';
@@ -405,10 +407,19 @@ export default function App() {
   const [newVoiceId, setNewVoiceId] = useState<string | null>(null); // Settings opens it to be named
   const [nameState, setNameState] = useState<'idle' | 'listening' | 'working'>('idle');
   const [voiceId, setVoiceId] = useState<string | null>(null);
+  // The chosen voice has to exist. If it was deleted, here or on another phone, go back to the
+  // default one instead of quietly speaking in the phone's own voice.
+  useEffect(() => {
+    if (voices.length && voiceId && !voices.some((v) => v.id === voiceId)) fallBackToDefaultVoice();
+  }, [voices, voiceId]);
   const voiceIdRef = useRef<string | null>(null);
   const screenReader = useRef(false);
   const [cloneStep, setCloneStep] = useState<CloneStep>('idle');
   const cloneStepRef = useRef<CloneStep>('idle');
+  const cloneTimer = useRef<ReturnType<typeof setTimeout> | null>(null); // the current step's timeout
+  const cloneStarting = useRef(false); // between the second tap and the recorder actually running
+  const defaultVoice = useRef<string | null>(null); // from GET /voices
+  const deletedVoices = useRef(new Set<string>()); // deleted on this phone; never listed again
   // Metering gives Walker the sound level, so he can stop listening when you stop talking.
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
 
@@ -642,6 +653,7 @@ export default function App() {
 
   // Opening Settings silences the app and pauses the guide; closing it turns the guide back on.
   function openSettings() {
+    loadVoices().catch(() => {}); // the team shares the voices; another phone may have changed them
     tapHaptic();
     settingsOpen.current = true;
     Speech.stop();
@@ -780,16 +792,32 @@ export default function App() {
     Speech.speak(data.sentence, { rate: SPEEDS[prefsRef.current.speed].rate });
   }
 
+  // Each step's timeout (the consent step expiring, the 30 s cap on a recording) belongs to that
+  // step. Left running, an old one fired in the middle of the next recording and cut it short.
   function setClone(step: CloneStep) {
+    if (cloneTimer.current) clearTimeout(cloneTimer.current);
+    cloneTimer.current = null;
     cloneStepRef.current = step;
     setCloneStep(step);
   }
 
   async function loadVoices() {
     const res = await fetch(`${API_URL}/voices`, { headers: HEADERS });
+    if (!res.ok) throw new Error(`Server ${res.status}`);
     const data: { default: string; voices: Voice[] } = await res.json();
-    setVoices(data.voices);
-    return data;
+    // ElevenLabs' own list can trail a delete by a moment; a voice deleted here stays gone.
+    const list = data.voices.filter((v) => !deletedVoices.current.has(v.id));
+    defaultVoice.current = data.default;
+    setVoices(list);
+    return { ...data, voices: list };
+  }
+
+  function fallBackToDefaultVoice() {
+    const id = defaultVoice.current ?? voices.find((v) => !v.custom)?.id ?? null;
+    if (!id) return;
+    voiceIdRef.current = id;
+    setVoiceId(id);
+    AsyncStorage.setItem(VOICE_KEY, id).catch(() => {});
   }
 
   function chooseVoice(v: Voice) {
@@ -819,21 +847,23 @@ export default function App() {
 
   async function deleteVoice(id: string) {
     const name = voices.find((v) => v.id === id)?.name ?? 'The voice';
+    // Gone from both lists at once, so it can't be picked while the server works. (It used to stay
+    // listed, and tappable, until the server had answered twice; picking it left the app on a voice
+    // that no longer exists.) The effect on `voices` moves off it if it was the voice in use.
+    deletedVoices.current.add(id);
+    setVoices((prev) => prev.filter((v) => v.id !== id));
+    sampleFiles.current.delete(id);
     try {
       const res = await fetch(`${API_URL}/voices/${id}`, { method: 'DELETE', headers: HEADERS });
-      if (!res.ok) throw new Error(`Server ${res.status}`);
-      sampleFiles.current.delete(id);
-      const data = await loadVoices();
-      // Deleted the voice in use: go back to the default one.
-      if (voiceIdRef.current === id) {
-        voiceIdRef.current = data.default;
-        setVoiceId(data.default);
-        AsyncStorage.setItem(VOICE_KEY, data.default).catch(() => {});
-      }
+      // 404: already deleted, from another phone (the team shares one set of voices).
+      if (!res.ok && res.status !== 404) throw new Error(`Server ${res.status}`);
+      await loadVoices().catch(() => {});
       await notify(Haptics.NotificationFeedbackType.Success);
       AccessibilityInfo.announceForAccessibility(`${name} deleted`);
     } catch (e) {
       console.warn(e);
+      deletedVoices.current.delete(id);
+      await loadVoices().catch(() => {}); // it's still there: list it again
       notify(Haptics.NotificationFeedbackType.Error);
       tell('Could not delete the voice. Try again.');
     }
@@ -904,38 +934,51 @@ export default function App() {
         'This records a trusted person for thirty seconds and makes a voice from it. ' +
         'Only record someone who has agreed. Double tap again to start recording.';
       tell(notice);
-      setTimeout(() => {
+      cloneTimer.current = setTimeout(() => {
         if (cloneStepRef.current === 'confirm') setClone('idle');
       }, 20000);
       return;
     }
     if (step === 'confirm') {
-      Speech.stop();
-      const { granted } = await requestRecordingPermissionsAsync();
-      if (!granted) {
-        setClone('idle');
-        tell('Microphone access is needed to record a voice.');
-        return;
-      }
-      if (guideOnRef.current) toggleGuide();
-      if (findOnRef.current) stopFind();
+      if (cloneStarting.current) return; // a second tap while the cue below is still playing
+      cloneStarting.current = true;
+      setClone('confirm'); // same step, but its 20 s expiry must not fire while this starts
       try {
-        // iOS only records when the audio session allows it; turned back off after the recording.
-        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-        await recorder.prepareToRecordAsync();
-        recorder.record();
-      } catch (e) {
-        console.warn(e);
-        setClone('idle');
-        tell('Could not start recording.');
-        return;
+        // Cut the consent notice. It plays in the app's ElevenLabs voice through the player, which
+        // Speech.stop() alone doesn't touch, so it kept talking into the recording.
+        player.pause();
+        Speech.stop();
+        const { granted } = await requestRecordingPermissionsAsync();
+        if (!granted) {
+          setClone('idle');
+          tell('Microphone access is needed to record a voice.');
+          return;
+        }
+        if (guideOnRef.current) toggleGuide();
+        if (findOnRef.current) stopFind();
+        // Without VoiceOver nothing said that recording had begun. Said before the microphone
+        // opens, so the app's voice isn't in the sample. (VoiceOver users get the announcement below.)
+        if (!screenReader.current) await speakPhrase(CLONE_RECORDING_CUE, true);
+        try {
+          // iOS only records when the audio session allows it; turned back off after the recording.
+          await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+          await recorder.prepareToRecordAsync();
+          recorder.record();
+        } catch (e) {
+          console.warn(e);
+          setClone('idle');
+          tell('Could not start recording.');
+          return;
+        }
+        setClone('recording');
+        await notify(Haptics.NotificationFeedbackType.Success);
+        AccessibilityInfo.announceForAccessibility('Recording. Speak naturally. Double tap to stop.');
+        cloneTimer.current = setTimeout(() => {
+          if (cloneStepRef.current === 'recording') cloneTap();
+        }, CLONE_MAX_MS);
+      } finally {
+        cloneStarting.current = false;
       }
-      setClone('recording');
-      await notify(Haptics.NotificationFeedbackType.Success);
-      AccessibilityInfo.announceForAccessibility('Recording. Speak naturally. Double tap to stop.');
-      setTimeout(() => {
-        if (cloneStepRef.current === 'recording') cloneTap();
-      }, CLONE_MAX_MS);
       return;
     }
     // step === 'recording': stop and upload.
@@ -956,7 +999,9 @@ export default function App() {
       }
       if (!res.ok) throw new Error(`Server ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const added: Voice = await res.json();
-      await loadVoices().catch(() => setVoices((prev) => [added, ...prev]));
+      // Listed even if ElevenLabs' own list hasn't caught up yet; otherwise the naming page never opens.
+      await loadVoices().catch(() => {});
+      setVoices((prev) => (prev.some((v) => v.id === added.id) ? prev : [added, ...prev]));
       chooseVoice(added);
       setNewVoiceId(added.id);
       setClone('idle');
