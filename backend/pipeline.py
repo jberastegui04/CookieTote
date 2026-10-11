@@ -164,9 +164,20 @@ def find_obstacle(depth: np.ndarray, warn_m: float) -> dict | None:
         best["direction"] = "ahead"
     if cells[best["direction"], "waist"] - best["distance"] <= BAND_MARGIN_M:
         best["height"] = "waist"
-    best["open"] = open_side(cells, best, warn_m)
     best["box"] = _box(depth, mask, best["distance"])
+    if best["box"]:
+        # Direction from where the near pixels actually sit, not which column won by a few cm (a
+        # flat floor or wall ties the columns and said "ahead" for a box clearly on the left).
+        # Right on 15 of 21 labeled photos, up from 12; the rest are frame-filling or debatable.
+        center = best["box"][0] + best["box"][2] / 2
+        best["direction"] = "left" if center < DIRECTION_LEFT else "right" if center > DIRECTION_RIGHT else "ahead"
+    best["open"] = open_side(cells, best, warn_m)
     return best
+
+
+# Near-pixel center (fraction of the frame width) beyond which an obstacle is to one side.
+DIRECTION_LEFT = 0.4
+DIRECTION_RIGHT = 0.6
 
 
 def open_side(cells: dict, best: dict, warn_m: float) -> str | None:
