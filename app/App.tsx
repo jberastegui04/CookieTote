@@ -720,6 +720,10 @@ export default function App() {
   const walkerVoice = useRef<string | undefined>(undefined); // identifier of his built-in fallback voice
   const walkerPlaying = useRef(false); // his ElevenLabs clip is on the player
   const walkerCancel = useRef(false); // stopWalker: cut him off now
+  // True while a trusted voice is being recorded: nothing in the app speaks (not Walker, not a
+  // status message, not a VoiceOver announcement), so only the person being recorded is heard.
+  const voiceRecording = useRef(false);
+  const handsFreeStop = useRef(false); // the Record row was tapped during Walker's recording: stop it now
   const voicesRef = useRef<Voice[]>([]); // the voice list, for the settings menu's async loop
   // Settings' page and the section Walker is reading, kept here so the spoken menu and the screen
   // move together both ways (see onSettingsPage).
@@ -935,6 +939,7 @@ export default function App() {
   // done. Every message is on the /say list (STATUS_PHRASES in backend/main.py); one that isn't
   // falls back to the phone's voice.
   function tell(text: string) {
+    if (voiceRecording.current) return;
     if (screenReader.current) {
       AccessibilityInfo.announceForAccessibilityWithOptions(text, { queue: false });
       return;
@@ -1164,9 +1169,34 @@ export default function App() {
   }
 
   // One button, three taps: consent notice, start recording, stop and upload.
-  // handsFree: Walker started it by voice. He has already said that recording is starting, so no
-  // "tap again to stop" cue, and it stops by itself after CLONE_HANDS_FREE_MS.
-  async function cloneTap(handsFree = false) {
+  // Sends a recording to /voices/clone and lists the new voice. Throws an Error whose message can be
+  // said out loud when the reason is known (cause 'spoken').
+  async function uploadClone(uri: string): Promise<Voice> {
+    const form = new FormData();
+    form.append('audio', new File(uri));
+    form.append('consent', 'true');
+    const res = await fetch(`${API_URL}/voices/clone`, { method: 'POST', body: form, headers: HEADERS });
+    if (res.status === 422 || res.status === 400) {
+      // The backend explains why (ElevenLabs refused it, or it was too short), in plain words.
+      const { detail } = await res.json().catch(() => ({ detail: null }));
+      throw new Error(res.status === 422 && detail ? String(detail) : 'Could not add the voice. Try again.', { cause: 'spoken' });
+    }
+    // 401/403: the server wants the app key (EXPO_PUBLIC_APP_KEY in app/.env) and didn't get it.
+    if (res.status === 401 || res.status === 403) throw new Error(NEEDS_APP_KEY, { cause: 'spoken' });
+    if (!res.ok) throw new Error(`Server ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const added: Voice = await res.json();
+    // Listed even if ElevenLabs' own list hasn't caught up yet; otherwise the naming page never opens.
+    await loadVoices().catch(() => {});
+    setVoices((prev) => (prev.some((v) => v.id === added.id) ? prev : [added, ...prev]));
+    return added;
+  }
+
+  async function cloneTap() {
+    // Walker is recording by voice (recordVoiceHandsFree): a tap just ends his recording early.
+    if (voiceRecording.current) {
+      handsFreeStop.current = true;
+      return;
+    }
     const step = cloneStepRef.current;
     if (step === 'uploading') return;
     if (step === 'idle') {
@@ -1199,7 +1229,7 @@ export default function App() {
         if (findOnRef.current) stopFind();
         // Without VoiceOver nothing said that recording had begun. Said before the microphone
         // opens, so the app's voice isn't in the sample. (VoiceOver users get the announcement below.)
-        if (!screenReader.current && !handsFree) await speakPhrase(CLONE_RECORDING_CUE, true);
+        if (!screenReader.current) await speakPhrase(CLONE_RECORDING_CUE, true);
         try {
           // iOS only records when the audio session allows it; turned back off after the recording.
           await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -1216,8 +1246,8 @@ export default function App() {
         AccessibilityInfo.announceForAccessibility('Recording. Speak naturally. Double tap to stop.');
         cloneTimer.current = setTimeout(() => {
           if (cloneStepRef.current === 'recording') cloneTap();
-        }, handsFree ? CLONE_HANDS_FREE_MS : CLONE_MAX_MS);
-        setCloneMaxS((handsFree ? CLONE_HANDS_FREE_MS : CLONE_MAX_MS) / 1000);
+        }, CLONE_MAX_MS);
+        setCloneMaxS(CLONE_MAX_MS / 1000);
       } finally {
         cloneStarting.current = false;
       }
@@ -1230,22 +1260,7 @@ export default function App() {
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
       if (!recorder.uri) throw new Error('No recording');
       tell('Adding the voice, please wait.');
-      const form = new FormData();
-      form.append('audio', new File(recorder.uri));
-      form.append('consent', 'true');
-      const res = await fetch(`${API_URL}/voices/clone`, { method: 'POST', body: form, headers: HEADERS });
-      if (res.status === 422) {
-        // The backend explains why ElevenLabs refused this recording, in plain words.
-        const { detail } = await res.json();
-        throw new Error(String(detail), { cause: 'spoken' });
-      }
-      // 401/403: the server wants the app key (EXPO_PUBLIC_APP_KEY in app/.env) and didn't get it.
-      if (res.status === 401 || res.status === 403) throw new Error(NEEDS_APP_KEY, { cause: 'spoken' });
-      if (!res.ok) throw new Error(`Server ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const added: Voice = await res.json();
-      // Listed even if ElevenLabs' own list hasn't caught up yet; otherwise the naming page never opens.
-      await loadVoices().catch(() => {});
-      setVoices((prev) => (prev.some((v) => v.id === added.id) ? prev : [added, ...prev]));
+      const added = await uploadClone(recorder.uri);
       chooseVoice(added);
       setNewVoiceId(added.id);
       setClone('idle');
@@ -1648,6 +1663,7 @@ export default function App() {
   }
 
   async function walkerSpeak(text: string) {
+    if (voiceRecording.current) return;
     walkerCancel.current = false;
     if (screenReader.current) {
       AccessibilityInfo.announceForAccessibilityWithOptions(text, { queue: false });
@@ -1874,7 +1890,7 @@ export default function App() {
     return true;
   }
 
-  // Plays a voice's sample ("Hi, I'm Sarah…") without choosing it, and waits until it's done.
+  // Plays a voice's sample ("This is the calm voice…") without choosing it, and waits until it's done.
   async function pickSampleAndWait(id: string) {
     await playSample(id);
     for (let i = 0; i < 20 && !player.playing; i++) await sleep(50);
@@ -1901,8 +1917,10 @@ export default function App() {
     return voiceLine(name);
   }
 
-  // Records a trusted voice by voice: consent first ("Say yes to start"), then the usual recording
-  // (its own cue, 30 seconds, stops by itself), and a spoken name. The new voice's name, or null.
+  // Records a trusted voice by voice, on its own (not through the tap flow): consent first ("Say yes to
+  // start"), Walker says recording is starting and finishes saying it before the microphone opens,
+  // then fifteen seconds with nothing in the app speaking, then it uploads, plays the new voice, and
+  // asks for a name. A tap on the Record row still stops it early. The new voice's name, or null.
   async function recordVoiceHandsFree(): Promise<string | null> {
     await walkerReply(MENU.recordConsent);
     const yes = await walkerHear();
@@ -1910,22 +1928,68 @@ export default function App() {
       await walkerReply(MENU.recordSkipped);
       return null;
     }
-    const before = voiceIdRef.current;
-    await walkerReply(MENU.recordStart);
-    setClone('confirm');
-    await cloneTap(true); // records 15 seconds, stops by itself, then adds the voice and plays it
-    for (let i = 0; i < 1200 && cloneStepRef.current !== 'idle'; i++) await sleep(100); // up to 2 minutes
-    const added = voiceIdRef.current;
-    if (!added || added === before) return null; // it failed, and said why
-    await sleep(1500); // the "Voice added." sample starts a moment later
-    for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
+    const { granted } = await requestRecordingPermissionsAsync();
+    if (!granted) {
+      await walkerReply(LINES.mic);
+      return null;
+    }
+    await walkerReply(MENU.recordStart); // fully said before the microphone opens
+    Speech.stop();
+    player.pause();
+    await sleep(300);
+    let uri: string | null = null;
+    voiceRecording.current = true;
+    handsFreeStop.current = false;
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setCloneMaxS(CLONE_HANDS_FREE_MS / 1000);
+      setClone('recording');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      // Fifteen seconds, or until the Record row is tapped (cloneTap sets handsFreeStop).
+      const end = Date.now() + CLONE_HANDS_FREE_MS;
+      while (Date.now() < end && !handsFreeStop.current && settingsOpen.current) await sleep(100);
+      await recorder.stop();
+      uri = recorder.uri;
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      voiceRecording.current = false;
+      await micIdle();
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    if (!uri) {
+      setClone('idle');
+      await walkerReply('Could not start recording.');
+      return null;
+    }
+    setClone('uploading');
+    await walkerReply('Adding the voice, please wait.');
+    let added: Voice;
+    try {
+      added = await uploadClone(uri);
+    } catch (e) {
+      console.warn(e);
+      setClone('idle');
+      notify(Haptics.NotificationFeedbackType.Error);
+      await walkerReply(e instanceof Error && e.cause === 'spoken' ? e.message : 'Could not add the voice. Try again.');
+      return null;
+    }
+    chooseVoice(added);
+    setClone('idle');
+    setNewVoiceId(added.id); // Settings shows its naming page while he asks for the name
+    notify(Haptics.NotificationFeedbackType.Success);
+    await walkerReply('Voice added.');
+    await pickSampleAndWait(added.id);
     await walkerReply(MENU.nameAsk);
     const said = await walkerHear();
     const name = said ? cleanName(said.text) : '';
-    if (!name) return voicesRef.current.find((v) => v.id === added)?.name ?? null;
-    await renameVoice(added, name);
+    if (!name) return added.name;
+    await renameVoice(added.id, name);
     return name;
   }
+
 
   async function closeMenu() {
     await walkerReply(MENU.closing);
@@ -1952,7 +2016,7 @@ export default function App() {
     const p = prefsRef.current;
     if (section === 'distance') return [unitsLine(p.units), warnLine(p.warning)];
     if (section === 'help') return [MENU.helpRead];
-    const name = voicesRef.current.find((v) => v.id === voiceIdRef.current)?.name ?? 'Walker';
+    const name = voicesRef.current.find((v) => v.id === voiceIdRef.current)?.name ?? 'Relaxed';
     return [onOffLine('Haptics', p.haptics), voiceLine(name), speedLine(p.speed)];
   }
 
@@ -1974,7 +2038,7 @@ export default function App() {
         return speedLine(speed);
       }
       case 'voice':
-        await pickVoice(change.voice); // plays it ("Hi, I'm George.")
+        await pickVoice(change.voice); // plays it ("This is the deep voice.")
         for (let i = 0; i < 20 && !player.playing; i++) await sleep(50);
         for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
         return voiceLine(change.voice.name);
@@ -2310,6 +2374,7 @@ export default function App() {
 
   // Says one phrase and waits for it to finish. ElevenLabs voice if available, else the phone's.
   async function speakPhrase(text: string, stop: boolean) {
+    if (voiceRecording.current) return;
     const token = ++speechToken.current;
     speechBusy.current = true;
     speakingStop.current = stop;
@@ -3279,7 +3344,7 @@ export default function App() {
           voiceId={voiceId}
           onPickVoice={pickVoice}
           cloneStep={cloneStep}
-          onClone={() => cloneTap()}
+          onClone={cloneTap}
           cloneMaxS={cloneMaxS}
           onReplaySetup={replaySetup}
           page={settingsPage}

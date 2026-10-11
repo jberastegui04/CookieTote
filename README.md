@@ -18,7 +18,7 @@ Walking toward it, it watches the way:
 
 Within reach, it dings and says where to reach: "You're there. Reach forward and a little left, at waist height." A "Stop" for something right in front wins over everything.
 
-**Walker.** A voice assistant. Press and hold anywhere and say what you want: "find the door", "start walking", "describe", "repeat that", "units feet", "warn me early", "use Sarah", "help". He walks new users through setup, and safety warnings always cut him off.
+**Walker.** A voice assistant. Press and hold anywhere and say what you want: "find the door", "start walking", "describe", "repeat that", "units feet", "warn me early", "use calm", "help". He walks new users through setup, and safety warnings always cut him off.
 
 **Indoor and outdoor setting.** Indoor, outdoor, or auto (guessed from the photo). Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors). "Warn me" sets it closer or earlier, and distances can be spoken in feet.
 
@@ -143,7 +143,7 @@ Form upload: `audio` (a recording of about 30 seconds, m4a or wav) and `consent`
 
 ### GET /voices/{voice_id}/sample.wav
 
-A WAV of a sample sentence in that voice, starting with its own name ("Hi, I'm Sarah."), for the picker. Cached after the first call.
+A WAV of a sample sentence in that voice, starting with which one it is ("This is the calm voice."), for the picker. Cached after the first call.
 
 ## Pipeline interface
 

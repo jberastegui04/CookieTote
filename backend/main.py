@@ -182,6 +182,8 @@ WALKER_PHRASES = {
     "Welcome to Cyclops. Tap anywhere to begin.",
     "Press and hold anywhere to talk to me, like: find the door. You can change my voice in Settings. "
     "Ask me for help any time.",
+    "Press and hold anywhere to talk to me, and say something like: find the door. You can change my "
+    "voice in Settings. Ask me for help any time.",
     "Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: "
     "find the door. You can change my voice in Settings. Ask me for help any time.",
     # Settings, hands free: mirrors MENU and the "Label: value." lines in app/walkerCommands.ts.
@@ -237,7 +239,7 @@ GUIDE_PHRASES = (
 )
 
 
-# Walker's settings menu says "Voice: Sarah." Voice names change (trusted voices are added and
+# Walker's settings menu says "Voice: Calm." Voice names change (trusted voices are added and
 # renamed), so this one is checked against the current list instead of a fixed set.
 YOUR_VOICE = re.compile(r"Voice: (.{1,40})\.")
 
@@ -423,11 +425,12 @@ async def delete_voice(voice_id: str):
 
 @app.get("/voices/{voice_id}/sample.wav")
 async def voice_sample(voice_id: str):
-    names = {v["id"]: v["name"] for v in await run_in_threadpool(voice.list_voices)}
-    if voice_id not in names:
+    voices = {v["id"]: v for v in await run_in_threadpool(voice.list_voices)}
+    if voice_id not in voices:
         raise HTTPException(404, "unknown voice")
-    # The voice says its own name first ("Hi, I'm Sarah."), so you know which one you picked.
-    wav = await run_in_threadpool(voice.speak_wav, voice.sample_sentence(names[voice_id]), voice_id)
+    # The voice says which one it is first ("This is the calm voice."), so you know what you picked.
+    v = voices[voice_id]
+    wav = await run_in_threadpool(voice.speak_wav, voice.sample_sentence(v["name"], v["custom"]), voice_id)
     if wav is None:
         raise HTTPException(503, "voice unavailable")
     return Response(content=wav, media_type="audio/wav")

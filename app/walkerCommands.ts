@@ -33,7 +33,7 @@ export const LINES = {
   welcome: 'Welcome to Cyclops. Tap anywhere to begin.',
   welcomeVO: 'Welcome to Cyclops. Double tap anywhere to begin.',
   introHowTo:
-    'Press and hold anywhere to talk to me, like: find the door. You can change my voice in Settings. Ask me for help any time.',
+    'Press and hold anywhere to talk to me, and say something like: find the door. You can change my voice in Settings. Ask me for help any time.',
 };
 
 // Settings, hands free (say "settings"): Walker lists the sections, reads the one you pick with its
@@ -155,7 +155,7 @@ export function parseCommand(heard: string, voices: Voice[]): WalkerCommand {
     if (has(text, ['normal', 'default', 'regular', 'usual'])) return { action: 'warning', warning: 'normal', reply: LINES.normal };
     if (has(text, ['close', 'closer', 'later', 'late'])) return { action: 'warning', warning: 'close', reply: LINES.close };
   }
-  // "use Sarah", "switch to Mom", "change the voice to George". Longest names first, so "Trusted
+  // "use calm", "switch to Mom", "change the voice to deep". Longest names first, so "Trusted
   // voice 2" wins over "Trusted voice".
   if (has(text, ['use', 'switch to', 'change', 'voice'])) {
     const byLength = [...voices].sort((a, b) => b.name.length - a.name.length);
@@ -183,7 +183,7 @@ export function sectionFromSpeech(heard: string): Section | 'done' | 'back' | nu
   return null;
 }
 
-// A change said inside a section ("feet", "haptics off", "faster", "use George"), or null.
+// A change said inside a section ("feet", "haptics off", "faster", "use deep"), or null.
 export function settingFromSpeech(heard: string, voices: Voice[]): SettingChange | null {
   const text = words(heard).join(' ');
   if (has(text, ['done', 'exit', 'go back', "that's all", "that's it"])) return { kind: 'done' }; // not "close": that's a warning distance

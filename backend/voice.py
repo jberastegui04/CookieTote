@@ -12,20 +12,23 @@ MODEL_ID = "eleven_flash_v2_5"
 # Short list for the app's voice picker. All premade ElevenLabs voices. The first is the default
 # unless ELEVENLABS_VOICE_ID is set in .env.
 VOICES = [
-    # Walker, the voice assistant, and the app's default voice ("Chris": relaxed, American). Mirrors
-    # WALKER_VOICE_ID in app/App.tsx.
-    {"id": "iP95p4xoKVk53GoZ742B", "name": "Walker"},
-    {"id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah"},
-    {"id": "Xb7hH8MSUJpSbSDYk0k2", "name": "Alice"},
-    {"id": "SAz9YHcvj6GT2YYXdXww", "name": "River"},
-    {"id": "JBFqnCBsd6RMkjVDRZzb", "name": "George"},
+    # Named for how they sound, not like people: everything is still Walker talking, so picking a
+    # voice shouldn't sound like renaming him. The first is Walker's default (ElevenLabs "Chris":
+    # relaxed, American). Mirrors WALKER_VOICE_ID in app/App.tsx.
+    {"id": "iP95p4xoKVk53GoZ742B", "name": "Relaxed"},
+    {"id": "EXAVITQu4vr4xnSDxMaL", "name": "Gentle"},  # Sarah
+    {"id": "Xb7hH8MSUJpSbSDYk0k2", "name": "Bright"},  # Alice
+    {"id": "SAz9YHcvj6GT2YYXdXww", "name": "Calm"},  # River
+    {"id": "JBFqnCBsd6RMkjVDRZzb", "name": "Deep"},  # George
 ]
 SAMPLE_SENTENCE = "Chair, about 1 meter, slightly left"
 
 
-def sample_sentence(name: str) -> str:
-    """What a voice says when you tap it in the app: its own name first, so you know which one it is."""
-    return f"Hi, I'm {name}. {SAMPLE_SENTENCE}."
+def sample_sentence(name: str, custom: bool = False) -> str:
+    """What a voice says when you tap it in the app: which one it is first ("This is the calm voice.",
+    or "This is Mom." for a recorded one), then a sample warning."""
+    which = name if custom else f"the {name.lower()} voice"
+    return f"This is {which}. {SAMPLE_SENTENCE}."
 # Cloned voices, recorded in the app from trusted people who agreed to it. New ones are named
 # "Trusted voice", "Trusted voice 2", ... until the user renames them in Settings.
 CLONE_NAME = "Trusted voice"
