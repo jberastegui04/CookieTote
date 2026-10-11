@@ -189,6 +189,10 @@ WALKER_PHRASES = {
     # Settings, hands free: mirrors MENU and the "Label: value." lines in app/walkerCommands.ts.
     "Settings. Say a section: distance, sound and touch, or help. Or say done to go back.",
     "Closing settings.", "Press and hold anywhere when you're ready.",
+    # A section opens: its settings' names. A setting is named: its choices. (Current values aren't read.)
+    "Units, and obstacle detection.", "Haptics, speech speed, and voice.",
+    "Meters, and feet.", "Close, normal, and far.", "On, and off.", "Faster, and slower.",
+    # Older builds:
     "Say units, or obstacle detection. Or say done to go back.",
     "Units. Say meters, or feet.", "Obstacle detection. Say close, normal, or far.",
     "Haptics. Say on, or off.", "Speech speed. Say faster, or slower.",
@@ -206,6 +210,11 @@ WALKER_PHRASES = {
     "It warns about things standing still in your path. It does not replace a cane, and it does not detect curbs, "
     "drop-offs, moving cars, or street crossings.",
     "Say replay setup. Or say done to go back.",
+}
+# What he says after a choice. Mirrors selectedLine() in app/walkerCommands.ts.
+WALKER_PHRASES |= {
+    f"{choice} selected."
+    for choice in ("Meters", "Feet", "Close", "Normal", "Far", "On", "Off", "Slowest", "Slower", "Faster", "Fastest")
 }
 WALKER_PHRASES |= {f"Units: {u}." for u in ("meters", "feet")}
 WALKER_PHRASES |= {f"Obstacle detection: {w}." for w in ("close", "normal", "far")}
@@ -239,14 +248,15 @@ GUIDE_PHRASES = (
 )
 
 
-# Walker's settings menu says "Voice: Calm." Voice names change (trusted voices are added and
-# renamed), so this one is checked against the current list instead of a fixed set.
-YOUR_VOICE = re.compile(r"Voice: (.{1,40})\.")
+# Walker's settings menu says "Calm selected." when a voice is picked, and "Voice: Calm." after a
+# rename or a new recording. Voice names change (trusted voices are added and renamed), so these
+# are checked against the current list instead of a fixed set.
+YOUR_VOICE = re.compile(r"Voice: (.{1,40})\.|(.{1,40}) selected\.")
 
 
 def _names_a_voice(text: str) -> bool:
     m = YOUR_VOICE.fullmatch(text)
-    return bool(m) and m.group(1) in {v["name"] for v in voice.list_voices()}
+    return bool(m) and (m.group(1) or m.group(2)) in {v["name"] for v in voice.list_voices()}
 
 
 @app.get("/say")

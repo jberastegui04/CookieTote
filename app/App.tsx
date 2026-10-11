@@ -37,14 +37,12 @@ import {
   cleanName,
   isYes,
   MENU,
-  onOffLine,
   parseCommand,
   sectionFromSpeech,
   settingFromSpeech,
-  speedLine,
-  unitsLine,
+  selectedLine,
   voiceLine,
-  warnLine,
+  WARN_WORD,
   type Section,
   type SettingChange,
   SETTING_ASK,
@@ -1835,9 +1833,7 @@ export default function App() {
           if (picked === 'done' || picked === 'back') return closeMenu();
           if (picked) {
             setLevel(picked);
-            // The values, then what can be said. (The choices used to be read only after a silence;
-            // silence no longer makes him speak, and a press and hold cuts him short anyway.)
-            lines = [...readSection(picked), askFor(picked)];
+            lines = readSection(picked);
             continue;
           }
           if (await otherCommand(heard)) return;
@@ -1895,7 +1891,7 @@ export default function App() {
         const other = sectionFromSpeech(heard.text);
         if (other && other !== 'done' && other !== 'back') {
           setLevel(other);
-          lines = [...readSection(other), askFor(other)];
+          lines = readSection(other);
           continue;
         }
         if (await otherCommand(heard)) return;
@@ -2051,17 +2047,12 @@ export default function App() {
     return heard && heard !== 'interrupted' ? heard : null;
   }
 
-  function askFor(section: Section) {
-    return section === 'distance' ? MENU.distanceAsk : section === 'sound' ? MENU.soundAsk : MENU.helpAsk;
-  }
-
-  // The section's settings with their current values, as Walker reads them.
+  // What Walker says when a section opens: the names of its settings, not what they're set to.
+  // Naming one gets its choices (SETTING_ASK), and picking one gets "Feet selected." (applyChange).
   function readSection(section: Section): string[] {
-    const p = prefsRef.current;
-    if (section === 'distance') return [unitsLine(p.units), warnLine(p.warning)];
-    if (section === 'help') return [MENU.helpRead];
-    const name = voicesRef.current.find((v) => v.id === voiceIdRef.current)?.name ?? 'Relaxed';
-    return [onOffLine('Haptics', p.haptics), voiceLine(name), speedLine(p.speed)];
+    if (section === 'distance') return [MENU.distanceAsk];
+    if (section === 'help') return [MENU.helpRead, MENU.helpAsk];
+    return [MENU.soundAsk];
   }
 
   // Makes the change and returns what Walker says to confirm it.
@@ -2069,23 +2060,23 @@ export default function App() {
     switch (change.kind) {
       case 'units':
         updatePrefs({ units: change.units });
-        return unitsLine(change.units);
+        return selectedLine(change.units);
       case 'warning':
         updatePrefs({ warning: change.warning });
-        return warnLine(change.warning);
+        return selectedLine(WARN_WORD[change.warning]);
       case 'haptics':
         updatePrefs({ haptics: change.on });
-        return onOffLine('Haptics', change.on);
+        return selectedLine(change.on ? 'on' : 'off');
       case 'speed': {
         const speed = Math.max(0, Math.min(SPEEDS.length - 1, prefsRef.current.speed + change.delta));
         updatePrefs({ speed });
-        return speedLine(speed);
+        return selectedLine(SPEEDS[speed].name);
       }
       case 'voice':
         await pickVoice(change.voice); // plays it ("This is the deep voice.")
         for (let i = 0; i < 20 && !player.playing; i++) await sleep(50);
         for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
-        return voiceLine(change.voice.name);
+        return selectedLine(change.voice.name);
       default:
         return LINES.didntCatch;
     }

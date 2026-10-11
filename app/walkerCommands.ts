@@ -1,7 +1,7 @@
 // Walker's fixed commands: what was heard (from POST /transcribe) -> one action and what Walker says.
 // Plain phrase matching, no AI deciding what to tap. Find uses /transcribe's own target and
 // description, so here it only needs to recognize that it's a find.
-import { SPEEDS, type Units, type Warning } from './prefs';
+import { type Units, type Warning } from './prefs';
 
 type Voice = { id: string; name: string; custom?: boolean };
 
@@ -37,21 +37,23 @@ export const LINES = {
 };
 
 // Settings, hands free (say "settings"): Walker lists the sections, reads the one you pick with its
-// current values ("Haptics: on."), and changes them as you say. "Done" goes back one level. All on
-// the /say list; the server builds the same "Label: value." lines, and allows "Voice: <name>." for
-// any name on the voice list (names change as voices are added).
+// settings' names ("Units, and obstacle detection."), a named setting's choices ("Meters, and
+// feet."), and what you picked ("Feet selected."). Current values are not read out. "Done" goes back
+// one level. All on the /say list; the server allows "<name> selected." and "Voice: <name>." for any
+// name on the voice list (names change as voices are added).
 export const MENU = {
   sections: 'Settings. Say a section: distance, sound and touch, or help. Or say done to go back.',
   closing: 'Closing settings.',
   // Said once when nothing was answered: after that he stays quiet until a press and hold.
   holdHint: "Press and hold anywhere when you're ready.",
-  distanceAsk: 'Say units, or obstacle detection. Or say done to go back.',
-  // A setting named on its own ("units"): its choices. The answer changes it ("feet" -> "Units: feet.").
-  unitsAsk: 'Units. Say meters, or feet.',
-  warnAsk: 'Obstacle detection. Say close, normal, or far.',
-  hapticsAsk: 'Haptics. Say on, or off.',
-  speedAsk: 'Speech speed. Say faster, or slower.',
-  soundAsk: 'Say haptics on or off, faster or slower, or voice to pick a different one. Or say done to go back.',
+  // A section opens: just the names of its settings.
+  distanceAsk: 'Units, and obstacle detection.',
+  soundAsk: 'Haptics, speech speed, and voice.',
+  // A setting is named ("units"): just its choices. The answer changes it ("feet" -> "Feet selected.").
+  unitsAsk: 'Meters, and feet.',
+  warnAsk: 'Close, normal, and far.',
+  hapticsAsk: 'On, and off.',
+  speedAsk: 'Faster, and slower.',
   // The voice menu (say "voice"): every voice plays, then pick one by name, or record a new one.
   defaultVoices: 'Default voices.',
   customVoices: 'Custom voices.',
@@ -73,11 +75,10 @@ export const MENU = {
 // "Obstacle Detection" on screen, and how Walker reads it out. It is close, normal or far ('early'
 // underneath, as the server calls it). The spoken command is still "warn me far".
 export const WARN_WORD: Record<Warning, string> = { close: 'close', normal: 'normal', early: 'far' };
-export const unitsLine = (units: Units) => `Units: ${units}.`;
-export const warnLine = (warning: Warning) => `Obstacle detection: ${WARN_WORD[warning]}.`;
-export const onOffLine = (label: 'Haptics', on: boolean) => `${label}: ${on ? 'on' : 'off'}.`;
-export const speedLine = (index: number) => `Speech speed: ${SPEEDS[index].name.toLowerCase()}.`;
-export const voiceLine = (name: string) => `Voice: ${name}.`;
+// What he says after a choice: "Feet selected.", "Far selected.", "Off selected.", "Faster selected.",
+// "Sarah selected."
+export const selectedLine = (choice: string) => `${choice.charAt(0).toUpperCase()}${choice.slice(1)} selected.`;
+export const voiceLine = (name: string) => `Voice: ${name}.`; // after a rename or a new recording
 
 export type Section = 'distance' | 'sound' | 'help';
 // The settings with a fixed list of choices, and what Walker asks when one is named without a value.
