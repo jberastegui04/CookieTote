@@ -982,6 +982,19 @@ export default function App() {
     setSetupDone(false);
   }
 
+  // Settings > Reset everything, for demos: default settings and voice, and the welcome poster again.
+  // Custom voices stay; they live on the server and the team shares them.
+  function resetAll() {
+    AsyncStorage.multiRemove([PREFS_KEY, VOICE_KEY, SETUP_KEY]).catch(() => {});
+    prefsRef.current = DEFAULT_PREFS;
+    setPrefs(DEFAULT_PREFS);
+    setTapHaptics(DEFAULT_PREFS.haptics);
+    const id = defaultVoice.current ?? WALKER_VOICE_ID;
+    voiceIdRef.current = id;
+    setVoiceId(id);
+    replaySetup();
+  }
+
   function updatePrefs(change: Partial<Prefs>) {
     const next = { ...prefsRef.current, ...change };
     prefsRef.current = next;
@@ -3378,6 +3391,7 @@ export default function App() {
           onClone={cloneTap}
           cloneMaxS={cloneMaxS}
           onReplaySetup={replaySetup}
+          onResetAll={resetAll}
           page={settingsPage}
           onPage={onSettingsPage}
           focus={settingsFocus}

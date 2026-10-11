@@ -26,6 +26,7 @@ type Props = {
   onClone: () => void;
   cloneMaxS: number; // how long this recording runs (shorter when started through Walker)
   onReplaySetup: () => void;
+  onResetAll: () => void;
   onClose: () => void;
   onHold: () => void; // press and hold anywhere: talk to Walker
   // Which page is showing, kept by the app so Walker's spoken menu and the screen stay in step:
@@ -282,6 +283,17 @@ function SettingsPages(p: Props) {
           <Section title="HELP" />
         </View>
         <LinkRow label="Replay setup" value="Play" hint="Goes through the first-launch setup again" onPress={p.onReplaySetup} />
+        <LinkRow
+          label="Reset everything"
+          value="Reset"
+          hint="Puts every setting and the voice back to how they started. Custom voices are kept."
+          onPress={() =>
+            Alert.alert('Reset everything?', 'Settings and the voice go back to how they started. Custom voices are kept.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Reset', style: 'destructive', onPress: p.onResetAll },
+            ])
+          }
+        />
         <LinkRow
           label="What it can't see"
           value={showLimits ? 'Hide' : 'Read'}
