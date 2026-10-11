@@ -8,12 +8,11 @@ type Voice = { id: string; name: string; custom?: boolean };
 // Everything Walker can say. He says these in the chosen voice (his own unless changed in Settings),
 // so each one is on the server's /say list (WALKER_PHRASES in backend/main.py); keep the two in sync.
 export const WALKER_HELP =
-  'You can say: find the door. Stop. What is in front of me. Repeat that. Settings. ' +
+  'You can say: find the door. Stop. Repeat that. Settings. ' +
   'Units feet, or meters. Warn me close, normal, or far. Or use, and a voice name.';
 export const LINES = {
   findIt: "Sure thing. Let's find it.",
   whatToFind: 'What should I look for?',
-  describe: 'Let me take a look.',
   repeat: 'Here it is again.',
   settings: 'Opening settings.',
   stop: 'Okay, stopping everything.',
@@ -34,7 +33,7 @@ export const LINES = {
   welcome: 'Welcome to Cyclops. Tap anywhere to begin.',
   welcomeVO: 'Welcome to Cyclops. Double tap anywhere to begin.',
   introHowTo:
-    "Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: find the door. You can change my voice in Settings. Ask me for help any time.",
+    'Press and hold anywhere to talk to me, like: find the door. You can change my voice in Settings. Ask me for help any time.',
 };
 
 // Settings, hands free (say "settings"): Walker lists the sections, reads the one you pick with its
@@ -45,7 +44,7 @@ export const MENU = {
   sections: 'Settings. Say a section: distance, sound and touch, or help. Or say done to go back.',
   closing: 'Closing settings.',
   distanceAsk: 'Say close, normal, or far. Or feet, or meters. Or say done to go back.',
-  soundAsk: 'Say haptics on or off, guidance voice on or off, faster or slower, or voice to pick a different one. Or say done to go back.',
+  soundAsk: 'Say haptics on or off, faster or slower, or voice to pick a different one. Or say done to go back.',
   // The voice menu (say "voice"): every voice plays, then pick one by name, or record a new one.
   defaultVoices: 'Default voices.',
   customVoices: 'Custom voices.',
@@ -64,11 +63,12 @@ export const MENU = {
     'It warns about things standing still in your path. It does not replace a cane, and it does not detect curbs, drop-offs, moving cars, or street crossings.',
   helpAsk: 'Say replay setup. Or say done to go back.',
 };
-// "Warn me" is close, normal or far out loud and on screen ('early' underneath, as the server calls it).
+// "Obstacle Detection" on screen, and how Walker reads it out. It is close, normal or far ('early'
+// underneath, as the server calls it). The spoken command is still "warn me far".
 export const WARN_WORD: Record<Warning, string> = { close: 'close', normal: 'normal', early: 'far' };
 export const unitsLine = (units: Units) => `Units: ${units}.`;
-export const warnLine = (warning: Warning) => `Warn me: ${WARN_WORD[warning]}.`;
-export const onOffLine = (label: 'Guidance voice' | 'Haptics', on: boolean) => `${label}: ${on ? 'on' : 'off'}.`;
+export const warnLine = (warning: Warning) => `Obstacle detection: ${WARN_WORD[warning]}.`;
+export const onOffLine = (label: 'Haptics', on: boolean) => `${label}: ${on ? 'on' : 'off'}.`;
 export const speedLine = (index: number) => `Speech speed: ${SPEEDS[index].name.toLowerCase()}.`;
 export const voiceLine = (name: string) => `Voice: ${name}.`;
 
@@ -77,7 +77,6 @@ export type SettingChange =
   | { kind: 'units'; units: Units }
   | { kind: 'warning'; warning: Warning }
   | { kind: 'haptics'; on: boolean }
-  | { kind: 'speech'; on: boolean }
   | { kind: 'speed'; delta: 1 | -1 }
   | { kind: 'voice'; voice: Voice }
   | { kind: 'voices' } // "voice": open the voice menu
@@ -93,7 +92,7 @@ export const findLine = (target: string) => `Sure thing. Let's find the ${target
 export type WalkerCommand =
   | { action: 'find' }
   | { action: 'wake'; reply: string } // just his name: he answers and listens for the command
-  | { action: 'describe' | 'repeat' | 'settings' | 'stop' | 'none'; reply: string }
+  | { action: 'repeat' | 'settings' | 'stop' | 'none'; reply: string }
   | { action: 'units'; units: Units; reply: string }
   | { action: 'warning'; warning: Warning; reply: string }
   | { action: 'voice'; voice: Voice; reply: string };
@@ -105,10 +104,6 @@ const NAMES = ['walker', 'walkers', 'wocker', 'walter'];
 // door" isn't read as asking for help.
 const FIND = ['find', 'where is', "where's", 'where are', 'locate', 'search for', 'look for', 'looking for', 'take me to'];
 const HELP = ['help', 'what can i say', 'what can you do', 'options'];
-const DESCRIBE = [
-  "what's in front", 'what is in front', "what's ahead", 'what is ahead', 'what do you see', 'what can you see',
-  'describe', "what's this", 'what is this', "what's that", 'what is that', 'scan', 'look around',
-];
 const REPEAT = ['repeat', 'say that again', 'say it again', 'what did you say'];
 const STOP = ['stop', 'cancel', 'never mind', 'nevermind', 'quit', "that's enough", 'enough'];
 
@@ -154,7 +149,6 @@ export function parseCommand(heard: string, voices: Voice[]): WalkerCommand {
     if (v) return { action: 'voice', voice: v, reply: LINES.voice };
   }
 
-  if (has(text, DESCRIBE)) return { action: 'describe', reply: LINES.describe };
   if (has(text, REPEAT)) return { action: 'repeat', reply: LINES.repeat };
   if (has(text, ['settings'])) return { action: 'settings', reply: LINES.settings };
   if (has(text, STOP)) return { action: 'stop', reply: LINES.stop };
@@ -184,10 +178,6 @@ export function settingFromSpeech(heard: string, voices: Voice[]): SettingChange
   if (has(text, ['haptics', 'haptic', 'vibration', 'vibrate'])) {
     if (has(text, OFF_WORDS)) return { kind: 'haptics', on: false };
     if (has(text, ON_WORDS)) return { kind: 'haptics', on: true };
-  }
-  if (has(text, ['guidance voice', 'natural voice', 'guidance'])) {
-    if (has(text, OFF_WORDS)) return { kind: 'speech', on: false };
-    if (has(text, ON_WORDS)) return { kind: 'speech', on: true };
   }
   if (has(text, ['faster', 'quicker', 'speed up'])) return { kind: 'speed', delta: 1 };
   if (has(text, ['slower', 'slow down'])) return { kind: 'speed', delta: -1 };

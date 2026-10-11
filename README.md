@@ -6,8 +6,6 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 ## Features
 
-**Describe mode.** Tap anywhere on the screen. The app takes one photo, finds the closest obstacle in your walking path, and speaks it first, for example "Chair, about 1 meter, slightly left." or "Path ahead looks open." Then it names up to three other things it is sure of, nearest first: "I also see a table on your left, about 3 meters, and two people on your right, about 2 meters."
-
 **Guide mode.** A toggle you leave on while walking. The app checks depth about once a second and a voice of your choosing (including a cloned trusted voice) tells you what changed, in short general phrases: "Something ahead, about 2 meters", "Something close on your left", "Stop. Something right in front of you. More room on the right", "Path looks open". It speaks only when the situation changes, with a reminder every few seconds while something is there, and never talks over itself. One buzz on "stop". No beeps. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
 **Find mode.** Say or pick what you're looking for: any of 79 everyday objects ("chair", "backpack", "laptop"), a description ("the red bench"), or anything else in plain words ("exit sign"). Turn slowly; when the app is sure, it locks on with a chime, and the voice tells you which way to turn: "Chair, turn a little right and walk about 3 meters." then "Straight ahead." the moment you're lined up. It remembers which way the phone was pointing (gyro), so if you turn away it says "Chair at 2 o'clock" and pulses toward it, stronger as you face it.
@@ -36,7 +34,7 @@ Within reach, it dings and says where to reach: "You're there. Reach forward and
 2. Depth Anything V2 (Hugging Face) estimates distance for every pixel.
 3. We check a lane down the middle of the frame, split into foot, waist, and head height, and find the closest thing within the warning distance.
 4. An object detector (DETR) adds a name if it recognizes the obstacle. If not, we still warn. Describe also names up to three other things it's sure of.
-5. Describe mode builds a short sentence and ElevenLabs speaks it. Guide mode gets distance, direction and open side back about once a second, and the phone turns changes into short spoken phrases in the chosen voice.
+5. Guide mode gets distance, direction and open side back about once a second, and the phone turns changes into short spoken phrases in the chosen voice.
 6. Find mode sends frames to `/find`: DETR (or OWLv2 for anything else, SigLIP for descriptions) locates the target, the same depth map measures it and the way to it, and the phone's tracker and gyro turn that into turns, pulses, detours and arrival.
 
 Everything runs on a Hugging Face Space with a T4 GPU in half precision: about 0.1 to 0.3 s per frame on the server, two frames in flight.
@@ -220,7 +218,7 @@ Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backen
 - Every touchable element has an `accessibilityLabel`, `accessibilityHint`, and `accessibilityRole`. The guide toggle uses the switch role so VoiceOver says on or off.
 - The camera overlay is visual only, so it's hidden from VoiceOver with `accessible={false}`.
 - Status changes (scanning, guide on, no connection) are announced with `AccessibilityInfo.announceForAccessibility`.
-- Magic tap repeats the last warning.
+- Magic tap repeats the last thing the voice said.
 - Nothing is shown only on screen. Every state is spoken or felt.
 - Keep VoiceOver labels short and start app audio a moment after the tap so the two don't overlap.
 - Every color passes 7 to 1 contrast.

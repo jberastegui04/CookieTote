@@ -227,6 +227,7 @@ export default function Settings(p: Props) {
         <View onLayout={markSection('distance')}>
           <Section title="DISTANCE" />
         </View>
+        <Text style={styles.subLabel}>Units</Text>
         <Segment
           value={p.prefs.units}
           onChange={(units) => p.onPrefs({ units })}
@@ -236,7 +237,7 @@ export default function Settings(p: Props) {
           ]}
         />
         <View style={styles.gap} />
-        <Text style={styles.subLabel}>Warn me</Text>
+        <Text style={styles.subLabel}>Obstacle Detection</Text>
         <Segment
           value={p.prefs.warning}
           onChange={(warning) => p.onPrefs({ warning })}
@@ -250,12 +251,6 @@ export default function Settings(p: Props) {
         <View onLayout={markSection('sound')}>
           <Section title="SOUND & TOUCH" />
         </View>
-        <ToggleRow
-          label="Guidance voice"
-          hint="When off, the phone's own voice reads warnings instead"
-          value={p.prefs.speech}
-          onChange={(v) => p.onPrefs({ speech: v })}
-        />
         <ToggleRow
           label="Haptics"
           hint="Vibrates for warnings and while finding"

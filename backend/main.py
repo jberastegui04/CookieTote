@@ -147,7 +147,7 @@ for where in ("ahead", "on your left", "on your right"):
 # Short status messages the app says with tell(), so they come in the chosen voice like everything
 # else (otherwise the phone's own voice cuts in). Mirrors the tell() calls in app/App.tsx.
 STATUS_PHRASES = {
-    "Find off", "Still checking.", "Nothing to repeat yet. Tap anywhere to scan.",
+    "Find off", "Still checking.", "Nothing to repeat yet. Tap anywhere to scan.", "Nothing to repeat yet.",
     "Lost connection.", "No connection. Try again.",
     "Finding it. Turn slowly.",
     "Microphone access is needed to say what to find.", "I didn't catch that. Try again.",
@@ -172,17 +172,23 @@ WALKER_PHRASES = {
     "Let me take a look.", "Here it is again.", "Opening settings.", "Okay, stopping everything.",
     "Got it. Feet it is.", "Got it. Meters it is.", "Got it. I'll warn you from farther away.",
     "Got it. Normal warnings.", "Got it. I'll only warn you when things are close.", "Got it. Here's the new voice.",
+    "You can say: find the door. Stop. Repeat that. Settings. "
+    "Units feet, or meters. Warn me close, normal, or far. Or use, and a voice name.",
+    # Tap to describe was removed from the app. Its three lines stay listed for phones still on an older build.
     "You can say: find the door. Stop. What is in front of me. Repeat that. Settings. "
     "Units feet, or meters. Warn me close, normal, or far. Or use, and a voice name.",
     "Sorry, say help for options.", "Yeah? What do you need?", "Sorry, I didn't catch that.",
     "Sorry, I couldn't hear you. Try again.", "I need the microphone to hear you.",
     "Welcome to Cyclops. Tap anywhere to begin.",
+    "Press and hold anywhere to talk to me, like: find the door. You can change my voice in Settings. "
+    "Ask me for help any time.",
     "Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: "
     "find the door. You can change my voice in Settings. Ask me for help any time.",
     # Settings, hands free: mirrors MENU and the "Label: value." lines in app/walkerCommands.ts.
     "Settings. Say a section: distance, sound and touch, or help. Or say done to go back.",
     "Closing settings.",
     "Say close, normal, or far. Or feet, or meters. Or say done to go back.",
+    "Say haptics on or off, faster or slower, or voice to pick a different one. Or say done to go back.",
     "Say haptics on or off, guidance voice on or off, faster or slower, or voice to pick a different one. "
     "Or say done to go back.",
     "Default voices.", "Custom voices.", "No custom voices yet.",
@@ -197,7 +203,8 @@ WALKER_PHRASES = {
     "Say replay setup. Or say done to go back.",
 }
 WALKER_PHRASES |= {f"Units: {u}." for u in ("meters", "feet")}
-WALKER_PHRASES |= {f"Warn me: {w}." for w in ("close", "normal", "far")}
+WALKER_PHRASES |= {f"Obstacle detection: {w}." for w in ("close", "normal", "far")}
+WALKER_PHRASES |= {f"Warn me: {w}." for w in ("close", "normal", "far")}  # older builds
 WALKER_PHRASES |= {f"{label}: {state}." for label in ("Guidance voice", "Haptics") for state in ("on", "off")}
 WALKER_PHRASES |= {f"Speech speed: {name}." for name in ("slowest", "slower", "normal", "faster", "fastest")}
 WALKER_PHRASES |= {f"Sure thing. Let's find the {t}." for t in pipeline.FIND_TARGETS}

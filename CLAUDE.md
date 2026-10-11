@@ -48,7 +48,7 @@ Scope (Oct 11): indoor only (every request sends `mode=indoor`; no indoor/outdoo
 
 ## Accessibility rules (non-negotiable)
 - Every touchable has `accessibilityLabel`, `accessibilityHint`, and `accessibilityRole`. The guide toggle uses the switch role. Test with VoiceOver on.
-- The whole screen is the scan button. Never require precise taps. Magic tap repeats the last warning.
+- Tap to describe was removed from the app (2026-10-11): tapping the camera screen does nothing, and `scan()` and `POST /describe` are left in place unused. The whole screen is the Walker button: press and hold anywhere to talk. Never require precise taps. Magic tap repeats the last thing the voice said.
 - Status changes are announced with `AccessibilityInfo.announceForAccessibility`. Nothing is shown only on screen. The camera overlay is hidden from VoiceOver.
 - App audio starts a moment after a tap so it doesn't overlap VoiceOver.
 - Yellow (#FFD60A) on near-black (#0B0B0C), dark text on yellow buttons; colors live in `app/theme.ts` (use `C.*`, no hard-coded hex). Large bold text (Atkinson Hyperlegible Next once installed), contrast at least 7:1.

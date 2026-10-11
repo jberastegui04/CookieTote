@@ -700,6 +700,7 @@ export default function App() {
   const speechToken = useRef(0);
   const speechCut = useRef(0); // bumped when a phrase is cut on purpose (a Stop), so its wait ends
   const speakingText = useRef<string | null>(null); // what the voice is saying right now
+  const lastSaid = useRef<string | null>(null); // the last direction the voice gave, for "repeat that"
   const offCenter = useRef(false); // the target has been off to one side since the last "Straight ahead."
   const linedUpAt = useRef(0);
   // A server that hasn't been redeployed still says "slightly left"; the app matches it, so the two
@@ -797,7 +798,8 @@ export default function App() {
       .then(([[, savedSetup], [, savedPrefs]]) => {
         setSetupDone(!ALWAYS_SHOW_SETUP && savedSetup === '1');
         if (savedPrefs) {
-          const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs) };
+          // speech: the Guidance voice switch was removed, so a phone that had it off must not stay off.
+          const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs), speech: true };
           prefsRef.current = loaded;
           setPrefs(loaded);
           setTapHaptics(loaded.haptics);
@@ -1265,7 +1267,8 @@ export default function App() {
       return;
     }
     if (!last) {
-      tell('Nothing to repeat yet. Tap anywhere to scan.');
+      // No scans any more: repeat the last direction the voice gave.
+      tell(lastSaid.current ?? 'Nothing to repeat yet.');
       return;
     }
     quietUntil.current = Date.now() + (last.audio_b64 ? 1500 : 3500);
@@ -1700,7 +1703,7 @@ export default function App() {
 
   // Walker's most likely first lines, in his voice, so his first answer isn't late.
   async function prefetchWalker() {
-    for (const text of [LINES.welcome, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
+    for (const text of [LINES.welcome, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.stop, LINES.cantHear, LINES.unknown]) {
       await fetchPhrase(text);
     }
   }
@@ -1928,7 +1931,7 @@ export default function App() {
     if (section === 'distance') return [unitsLine(p.units), warnLine(p.warning)];
     if (section === 'help') return [MENU.helpRead];
     const name = voicesRef.current.find((v) => v.id === voiceIdRef.current)?.name ?? 'Walker';
-    return [onOffLine('Guidance voice', p.speech), onOffLine('Haptics', p.haptics), voiceLine(name), speedLine(p.speed)];
+    return [onOffLine('Haptics', p.haptics), voiceLine(name), speedLine(p.speed)];
   }
 
   // Makes the change and returns what Walker says to confirm it.
@@ -1943,9 +1946,6 @@ export default function App() {
       case 'haptics':
         updatePrefs({ haptics: change.on });
         return onOffLine('Haptics', change.on);
-      case 'speech':
-        updatePrefs({ speech: change.on });
-        return onOffLine('Guidance voice', change.on);
       case 'speed': {
         const speed = Math.max(0, Math.min(SPEEDS.length - 1, prefsRef.current.speed + change.delta));
         updatePrefs({ speed });
@@ -1968,10 +1968,6 @@ export default function App() {
         if (!heard.target) break;
         if (findOnRef.current) stopFind(false); // already finding something else: switch
         startFind(heard.target, heard.description, heard.open_vocab ?? false, true);
-        break;
-      case 'describe':
-        if (findOnRef.current) stopFind(false);
-        scan();
         break;
       case 'repeat':
         repeatLast();
@@ -2927,6 +2923,7 @@ export default function App() {
       if (aheadWarned.current && aheadWarned.current.key === s.key) aheadWarned.current.spokenAt = Date.now();
       if (pathHold.current && pathHold.current.key === s.key) pathHold.current.spokenAt = Date.now();
       setGuideText(s.text);
+      lastSaid.current = s.text;
       await speakPhrase(s.text, s.stop);
       lastEndedAt = Date.now();
     }
@@ -3051,7 +3048,7 @@ export default function App() {
             ? guideText || null
             : resultVisible && result?.clear
             ? null
-            : 'Tap anywhere';
+            : 'Press and hold to talk';
   const label = findOn ? capitalize(findTarget ?? '') : found?.label ? capitalize(found.label) : null;
 
   // Where a box lands on screen: the 3:4 photo is scaled to cover the screen.
@@ -3173,12 +3170,13 @@ export default function App() {
         }}
       />
 
-      {/* The whole screen is one big tap target. */}
+      {/* The whole screen is one big target. Tapping it used to take a photo and describe what was
+          ahead; that feature was removed (the scan() code and POST /describe are still there, unused).
+          To bring it back: onPress={scan}. */}
       <Pressable
         style={StyleSheet.absoluteFill}
-        onPress={scan}
         // Press and hold anywhere talks to Walker (the Find screen has its own). Works with or
-        // without VoiceOver (with it on, that's double-tap and hold). Repeating the last warning is
+        // without VoiceOver (with it on, that's double-tap and hold). Repeating the last thing said is
         // "Walker, repeat that", or the magic tap with VoiceOver.
         onLongPress={() => {
           tapHaptic();
@@ -3186,9 +3184,8 @@ export default function App() {
         }}
         delayLongPress={600}
         accessibilityRole="button"
-        accessibilityLabel="Describe what's ahead"
-        accessibilityHint="Double tap to scan. Double tap and hold to talk to Walker."
-        accessibilityState={{ busy: status === 'capturing' || status === 'thinking' }}
+        accessibilityLabel="Talk to Walker"
+        accessibilityHint="Double tap and hold, then say what you need, like: find the door."
       />
 
       {findOn && findTarget ? (
