@@ -731,6 +731,7 @@ export default function App() {
   const settingsPageRef = useRef<SettingsPage>('main');
   const [settingsFocus, setSettingsFocus] = useState<Section | null>(null);
   const menuActive = useRef(false); // Walker's spoken settings menu is running
+  const holdAsked = useRef(false); // press and hold in Settings: he should listen now
   const menuJump = useRef<'voices' | 'sound' | null>(null); // a tap moved the screen; the menu follows
   // Each start of Find, the voice loop, or the pulse loop bumps its counter, and an older copy still
   // running sees that and quits. So starting Find again while finding (Walker: "find the door") never
@@ -1737,8 +1738,14 @@ export default function App() {
   // and the answer changes it. "Done" (or "back") goes back one level. Anything else is tried as
   // another section, then as a normal command ("find the door" closes Settings and does it), so
   // nothing is a dead end.
-  // Ends when Settings closes, or after three silent tries.
-  async function settingsMenu() {
+  // Ends when Settings closes.
+  //
+  // Turn taking: after he asks something he listens once, so an answer given straight away needs no
+  // hands. If nothing is said he doesn't say sorry, repeat himself or count down: he says once that
+  // a press and hold brings him back, then waits, for as long as Settings is open. Press and hold
+  // anywhere (settingsHold) makes him listen, the same gesture as on the camera and Find screens, and
+  // also cuts in while he's talking. listenFirst: started by that press, so he listens before speaking.
+  async function settingsMenu(listenFirst = false) {
     const live = () => settingsOpen.current;
     let level: 'top' | Section | 'voices' = 'top';
     // Moves the screen with him: the voice page for the voices, otherwise Settings scrolled to the
@@ -1763,8 +1770,8 @@ export default function App() {
       }
       return false;
     };
-    let lines: string[] = [MENU.sections];
-    let silent = 0;
+    let lines: string[] = listenFirst ? [] : [MENU.sections];
+    let hinted = false; // he has said how to bring him back
     let pending: SettingName | null = null; // a setting was named; he asked for its choices
     // Default voices, then custom ones (each plays and says its own name), as on the screen.
     const enterVoices = async () => {
@@ -1773,14 +1780,14 @@ export default function App() {
       const own = voicesRef.current.filter((v) => v.custom);
       await walkerReply(MENU.defaultVoices);
       for (const v of defaults) {
-        if (!live() || menuJump.current) return;
+        if (!live() || menuJump.current || holdAsked.current) return; // a press and hold skips the rest
         await pickSampleAndWait(v.id);
       }
-      if (!live() || menuJump.current) return;
+      if (!live() || menuJump.current || holdAsked.current) return; // a press and hold skips the rest
       await walkerReply(MENU.customVoices);
       if (own.length === 0) await walkerReply(MENU.noCustom);
       for (const v of own) {
-        if (!live() || menuJump.current) return;
+        if (!live() || menuJump.current || holdAsked.current) return; // a press and hold skips the rest
         await pickSampleAndWait(v.id);
       }
       lines = [MENU.voiceAsk];
@@ -1788,30 +1795,36 @@ export default function App() {
     menuActive.current = true;
     menuJump.current = null;
     try {
-      while (live() && silent < 3) {
+      while (live()) {
         if (await followTap()) continue;
         for (const line of lines) {
-          if (!live() || menuJump.current) break;
+          if (!live() || menuJump.current || holdAsked.current) break; // a press and hold cuts in
           await walkerReply(line);
         }
         if (menuJump.current) continue;
+        holdAsked.current = false;
         const heard = live() ? await walkerHear() : null;
         if (!live()) return;
         if (menuJump.current) continue;
         if (!heard) {
-          silent += 1;
-          lines = [pending ? SETTING_ASK[pending] : level === 'top' ? MENU.sections : level === 'voices' ? MENU.voiceAsk : askFor(level)];
+          // Nothing said. Quiet from here until a press and hold (or a tap that moves the screen, or
+          // Settings closing). Where he was, and any question he had asked (pending), is kept.
+          if (!hinted && !holdAsked.current) {
+            hinted = true;
+            await walkerReply(MENU.holdHint);
+          }
+          while (live() && !menuJump.current && !holdAsked.current) await sleep(100);
+          lines = [];
           continue;
         }
-        silent = 0;
         if (level === 'top') {
           const picked = sectionFromSpeech(heard.text);
           if (picked === 'done' || picked === 'back') return closeMenu();
           if (picked) {
             setLevel(picked);
-            // The values themselves say what can change ("Haptics: on."), so he just listens; the
-            // options are read out only if nothing is said. Help has no values, so it keeps its prompt.
-            lines = picked === 'help' ? [...readSection(picked), askFor(picked)] : readSection(picked);
+            // The values, then what can be said. (The choices used to be read only after a silence;
+            // silence no longer makes him speak, and a press and hold cuts him short anyway.)
+            lines = [...readSection(picked), askFor(picked)];
             continue;
           }
           if (await otherCommand(heard)) return;
@@ -1869,7 +1882,7 @@ export default function App() {
         const other = sectionFromSpeech(heard.text);
         if (other && other !== 'done' && other !== 'back') {
           setLevel(other);
-          lines = other === 'help' ? [...readSection(other), askFor(other)] : readSection(other);
+          lines = [...readSection(other), askFor(other)];
           continue;
         }
         if (await otherCommand(heard)) return;
@@ -1990,6 +2003,24 @@ export default function App() {
     return name;
   }
 
+
+  // Press and hold anywhere in Settings. Listening already: that's the end of the answer (as a
+  // second tap is elsewhere). Talking: cuts him off and listens. Otherwise he listens now, starting
+  // the spoken menu if Settings was opened by hand.
+  function settingsHold() {
+    if (cloneStepRef.current !== 'idle' || nameState !== 'idle') return; // the microphone is in use
+    const state = walkerStateRef.current;
+    if (state === 'thinking') return;
+    tapHaptic();
+    if (state === 'listening') {
+      walkerDone.current = true;
+      return;
+    }
+    holdAsked.current = true;
+    if (state === 'talking') stopWalker();
+    else player.pause(); // a voice sample, if one is playing
+    if (!menuActive.current) settingsMenu(true);
+  }
 
   async function closeMenu() {
     await walkerReply(MENU.closing);
@@ -3351,6 +3382,7 @@ export default function App() {
           onPage={onSettingsPage}
           focus={settingsFocus}
           onClose={closeSettings}
+          onHold={settingsHold}
         />
       ) : null}
 

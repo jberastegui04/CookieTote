@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, Tap, ToggleRow, VoiceList } from './controls';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, Tap, ToggleRow, VoiceList, HOLD_MS, HoldContext } from './controls';
 import type { Prefs } from './prefs';
 import { Enter } from './motion';
 import { DotGrid } from './texture';
@@ -27,6 +27,7 @@ type Props = {
   cloneMaxS: number; // how long this recording runs (shorter when started through Walker)
   onReplaySetup: () => void;
   onClose: () => void;
+  onHold: () => void; // press and hold anywhere: talk to Walker
   // Which page is showing, kept by the app so Walker's spoken menu and the screen stay in step:
   // saying "voice" opens the voice page, and tapping it moves Walker there too.
   page: SettingsPage;
@@ -49,7 +50,19 @@ const SAY_NAME_LABEL: Record<Listen, string> = {
   working: 'Working it out…',
 };
 
+// Press and hold anywhere on any Settings page talks to Walker: on a row (through HoldContext) or
+// on empty space (the Pressable here, which VoiceOver doesn't see as an element of its own).
 export default function Settings(p: Props) {
+  return (
+    <HoldContext.Provider value={p.onHold}>
+      <Pressable style={StyleSheet.absoluteFill} onLongPress={p.onHold} delayLongPress={HOLD_MS} accessible={false} accessibilityViewIsModal>
+        <SettingsPages {...p} />
+      </Pressable>
+    </HoldContext.Provider>
+  );
+}
+
+function SettingsPages(p: Props) {
   // The voice list opens as its own page, like a row in iPhone Settings, and each trusted voice
   // opens its own page from there (rename, delete).
   const page = p.page;

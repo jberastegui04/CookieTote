@@ -188,7 +188,7 @@ WALKER_PHRASES = {
     "find the door. You can change my voice in Settings. Ask me for help any time.",
     # Settings, hands free: mirrors MENU and the "Label: value." lines in app/walkerCommands.ts.
     "Settings. Say a section: distance, sound and touch, or help. Or say done to go back.",
-    "Closing settings.",
+    "Closing settings.", "Press and hold anywhere when you're ready.",
     "Say units, or obstacle detection. Or say done to go back.",
     "Units. Say meters, or feet.", "Obstacle detection. Say close, normal, or far.",
     "Haptics. Say on, or off.", "Speech speed. Say faster, or slower.",

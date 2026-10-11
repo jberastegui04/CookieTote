@@ -43,6 +43,8 @@ export const LINES = {
 export const MENU = {
   sections: 'Settings. Say a section: distance, sound and touch, or help. Or say done to go back.',
   closing: 'Closing settings.',
+  // Said once when nothing was answered: after that he stays quiet until a press and hold.
+  holdHint: "Press and hold anywhere when you're ready.",
   distanceAsk: 'Say units, or obstacle detection. Or say done to go back.',
   // A setting named on its own ("units"): its choices. The answer changes it ("feet" -> "Units: feet.").
   unitsAsk: 'Units. Say meters, or feet.',

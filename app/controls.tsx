@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { notchHaptic, tapHaptic } from './feedback';
 import { SPEEDS } from './prefs';
@@ -6,6 +6,16 @@ import { GlowEdge } from './texture';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // Shared pieces for Settings and the first-launch setup, so both look the same.
+
+// Press and hold anywhere talks to Walker, in Settings as on the camera screen. Whoever shows these
+// controls provides the handler; every pressable then carries the long press, so holding a row
+// talks to him and doesn't also press the row when the finger lifts.
+export const HoldContext = createContext<(() => void) | undefined>(undefined);
+export const HOLD_MS = 600;
+function useHold() {
+  const onHold = useContext(HoldContext);
+  return onHold ? { onLongPress: onHold, delayLongPress: HOLD_MS } : {};
+}
 
 // A button that gives a light haptic and shrinks a little while pressed, so a press is felt and seen.
 export function Tap({
@@ -18,8 +28,10 @@ export function Tap({
   style?: StyleProp<ViewStyle>;
   children: ReactNode;
 }) {
+  const hold = useHold();
   return (
     <Pressable
+      {...hold}
       {...rest}
       onPress={() => {
         tapHaptic();
@@ -101,12 +113,14 @@ export function Segment<T extends string>(p: {
   value: T;
   onChange: (v: T) => void;
 }) {
+  const hold = useHold();
   return (
     <View style={s.segment} accessibilityRole="radiogroup">
       {p.options.map((o) => {
         const on = o.value === p.value;
         return (
           <Pressable
+      {...hold}
             key={o.value}
             style={({ pressed }) => [s.segItem, on && s.segOn, pressed && s.pressed]}
             onPress={() => {
@@ -127,8 +141,10 @@ export function Segment<T extends string>(p: {
 }
 
 export function ToggleRow(p: { label: string; hint: string; value: boolean; onChange: (v: boolean) => void }) {
+  const hold = useHold();
   return (
     <Pressable
+      {...hold}
       style={({ pressed }) => [s.row, pressed && s.pressed]}
       onPress={() => {
         tapHaptic();
@@ -151,8 +167,10 @@ export function ToggleRow(p: { label: string; hint: string; value: boolean; onCh
 }
 
 export function LinkRow(p: { label: string; a11yLabel?: string; hint?: string; value?: string; onPress: () => void; active?: boolean }) {
+  const hold = useHold();
   return (
     <Pressable
+      {...hold}
       style={({ pressed }) => [s.row, p.active && s.rowActive, pressed && s.pressed]}
       onPress={() => {
         tapHaptic();
@@ -178,6 +196,7 @@ export function VoiceList(p: {
   onEdit?: (v: { id: string; name: string }) => void;
   empty?: string;
 }) {
+  const hold = useHold();
   if (p.voices.length === 0) {
     return <Caption>{p.empty ?? 'Voices appear once the server is awake. This can take about a minute.'}</Caption>;
   }
@@ -187,6 +206,7 @@ export function VoiceList(p: {
         const on = v.id === p.selected;
         const pick = (
           <Pressable
+      {...hold}
             key={v.id}
             style={({ pressed }) => [p.onEdit ? s.pickArea : [s.row, on && s.rowSelected], pressed && s.pressed]}
             onPress={() => {
@@ -208,6 +228,7 @@ export function VoiceList(p: {
           <View key={v.id} style={[s.row, s.rowSplit, on && s.rowSelected]}>
             {pick}
             <Pressable
+      {...hold}
               style={({ pressed }) => [s.editButton, pressed && s.pressed]}
               onPress={() => {
                 tapHaptic();
