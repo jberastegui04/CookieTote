@@ -405,6 +405,29 @@ function withHowFar(sentence: string, meters: number, units: Units, wording: Wor
 // An obstacle in the target's direction, no nearer than the target less this, is the target
 // (FIND_SELF_M in pipeline.py; the app repeats the check once it has corrected the distance).
 const FIND_SELF_M = 0.6;
+// Arrival says where to reach: "You're there. Reach forward and a little left, at waist height."
+// Side: from the target's bearing (it no longer has to be dead center to count as arrived, only
+// within FIND_SMALL_TURN_DEG). Height: how far above or below the phone the target is, from the
+// camera's tilt (motion sensor), where the box sits in the picture, and the distance; the phone is
+// taken to be at about chest height. Phrases are REACH_PHRASES in backend/main.py.
+const V_HALF_FOV_DEG = 33; // top or bottom edge of the 3:4 picture (26 at the sides)
+type Band = 'head' | 'chest' | 'waist' | 'knee' | 'floor';
+type Reach = { side: 'left' | 'right' | null; band: Band | null };
+const BAND_WORDS: Record<Band, string> = {
+  head: 'at head height',
+  chest: 'at chest height',
+  waist: 'at waist height',
+  knee: 'at knee height',
+  floor: 'near the floor',
+};
+// Meters above (+) or below (-) the phone. With the phone at about 1.3 m: head 1.6, chest 1.3, waist
+// 1.0, knee 0.5, floor 0; each band runs to the midpoint with the next (a table top lands in waist,
+// a chair seat in knee).
+const bandFor = (rel: number): Band =>
+  rel > 0.15 ? 'head' : rel > -0.15 ? 'chest' : rel > -0.6 ? 'waist' : rel > -1.05 ? 'knee' : 'floor';
+const reachPhrase = (r: Reach) =>
+  `You're there. Reach forward${r.side ? ` and a little ${r.side}` : ''}${r.band ? `, ${BAND_WORDS[r.band]}` : ''}.`;
+// The older arrival line, still said when the server doesn't know the new ones yet.
 const arrivalPhrase = (target: string, openVocab: boolean) =>
   openVocab
     ? "You're there. It's right in front of you."
@@ -572,6 +595,7 @@ export default function App() {
   const findTargetRef = useRef<string | null>(null);
   const headingRef = useRef<number | null>(null); // phone heading in degrees, clockwise, from the gyro
   const yawFix = useRef(0); // radians added to the sensor's yaw to get the camera's heading (HEADING_FROM_CAMERA)
+  const elevationRef = useRef<number | null>(null); // how far the camera points above (+) or below (-) level, degrees
   const [headingNow, setHeadingNow] = useState<number | null>(null); // same, as state, so the screen follows the turn
   const targetHeadingRef = useRef<number | null>(null); // heading the target was last seen at
   const trackRef = useRef<Track | null>(null); // the object Find is following (tracker.ts)
@@ -1264,6 +1288,8 @@ export default function App() {
       .then(() => fetchPhrase(LINED_UP_PHRASE))
       .then(() => fetchPhrase(HANDOFF_PHRASE))
       .then(() => fetchPhrase(arrivalPhrase(target, open)))
+      .then(() => fetchPhrase(reachPhrase({ side: null, band: 'waist' })))
+      .then(() => fetchPhrase(reachPhrase({ side: null, band: 'chest' })))
       .then(() => fetchPhrase(LOST_PHRASE))
       .then(() => fetchPhrase(STAND_STILL_PHRASE))
       .then(() => fetchPhrase(detourPhrase('right', 'left', false)))
@@ -1677,6 +1703,11 @@ export default function App() {
           // On iOS alpha, beta, gamma are yaw (about vertical), pitch and roll, applied in that
           // order. The camera looks out of the back of the phone; its compass direction is yaw
           // plus this term. Pointing almost straight down it has no direction, so the last one holds.
+          if (Platform.OS === 'ios') {
+            // Upright it's 0; flat on a table, camera down, it's -90.
+            const up = -Math.cos(m.rotation.beta) * Math.cos(m.rotation.gamma);
+            elevationRef.current = (Math.asin(Math.max(-1, Math.min(1, up))) * 180) / Math.PI;
+          }
           if (HEADING_FROM_CAMERA && Platform.OS === 'ios') {
             const side = Math.sin(m.rotation.gamma);
             const forward = Math.sin(m.rotation.beta) * Math.cos(m.rotation.gamma);
@@ -1698,6 +1729,7 @@ export default function App() {
     motionSub.current?.remove();
     motionSub.current = null;
     headingRef.current = null;
+    elevationRef.current = null;
     setHeadingNow(null);
     targetHeadingRef.current = null;
     trackRef.current = null;
@@ -1825,13 +1857,17 @@ export default function App() {
   }
 
   // Centered and within reach: stop, ding, buzz, and say so.
-  async function arrive(target: string) {
+  async function arrive(target: string, reach: Reach) {
+    const openVocab = findOpenVocabRef.current;
     stopFind(false);
     setArrived(target);
     notify(Haptics.NotificationFeedbackType.Success);
     arriveSound.seekTo(0).then(() => arriveSound.play()).catch(() => {});
-    await sleep(450);
-    await speakPhrase(arrivalPhrase(target, findOpenVocabRef.current), true);
+    // Where to reach, if this server has the line; otherwise the older one, so the moment that
+    // matters most is never left to the phone's own voice.
+    const text = reachPhrase(reach);
+    const [uri] = await Promise.all([fetchPhrase(text), sleep(450)]);
+    await speakPhrase(uri || !prefsRef.current.speech ? text : arrivalPhrase(target, openVocab), true);
   }
 
   function stopFind(announce = true) {
@@ -2260,7 +2296,15 @@ export default function App() {
     if (data.found && data.bearing_deg !== null) {
       findMisses.current = 0;
       setFindInfo(data);
-      const nearByDepth = data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M;
+      // The target's angle above or below level: the camera's tilt plus where the box sits in the
+      // picture. Arrival goes by distance along the floor, so something low (on a seat, on the
+      // floor) counts when you're standing next to it, not only when the phone is next to it.
+      const elevation =
+        elevationRef.current === null
+          ? null
+          : elevationRef.current + (data.box ? (0.5 - (data.box[1] + data.box[3] / 2)) * 2 * V_HALF_FOV_DEG : 0);
+      const level = elevation === null ? 1 : Math.cos((elevation * Math.PI) / 180);
+      const nearByDepth = data.distance_m !== null && data.distance_m * level <= ARRIVE_DISTANCE_M;
       // A big box alone isn't enough: a door (0.9 m wide) is 60% of the frame from 1.5 m away, a
       // couch from farther. Also need depth to agree (within ARRIVE_BOX_DEPTH_M), or the box to spill
       // past both frame edges, which is the at-the-lens case where depth misreads.
@@ -2269,8 +2313,15 @@ export default function App() {
         data.box !== null &&
         data.box[2] >= ARRIVE_BOX_WIDTH &&
         ((data.distance_m !== null && data.distance_m <= ARRIVE_BOX_DEPTH_M) || spills);
-      if (data.centered && (nearByDepth || nearBySize)) {
-        arrive(target);
+      if (Math.abs(data.bearing_deg) <= FIND_SMALL_TURN_DEG && (nearByDepth || nearBySize)) {
+        arrive(target, {
+          side: Math.abs(data.bearing_deg) <= FIND_AHEAD_DEG ? null : data.bearing_deg > 0 ? 'right' : 'left',
+          // Height only when the distance can be trusted (not the at-the-lens case).
+          band:
+            elevation !== null && nearByDepth && data.distance_m !== null
+              ? bandFor(data.distance_m * Math.sin((elevation * Math.PI) / 180))
+              : null,
+        });
         return;
       }
       if (phase === 'approach') {
@@ -2284,7 +2335,9 @@ export default function App() {
           lastDriftAt.current = Date.now();
           situation.current = { key: `drift:${off > 0 ? 'right' : 'left'}`, text, stop: false };
         } else {
-          situation.current = { key: data.sentence, text: data.sentence, stop: false };
+          // On course: the voice stays quiet and the pulses guide (double tap when lined up).
+          // It speaks again when there is something to do: turn, tilt, an obstacle, arrival.
+          situation.current = { key: 'oncourse', text: '', stop: false };
         }
       } else {
         situation.current = { key: data.sentence, text: data.sentence, stop: false };
@@ -2458,7 +2511,7 @@ export default function App() {
       const s = situation.current;
       // Routine sentences wait while someone is talking to Walker. Safety ones never wait.
       const findPaused = findOnRef.current && walkerBusy();
-      if (!s || describePlaying() || speechBusy.current || findPaused || (!isUrgent(s) && walkerHolds.current)) {
+      if (!s || !s.text || describePlaying() || speechBusy.current || findPaused || (!isUrgent(s) && walkerHolds.current)) {
         await sleep(100);
         continue;
       }

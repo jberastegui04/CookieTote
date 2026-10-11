@@ -177,6 +177,12 @@ WALKER_PHRASES = {
     "Sorry, I couldn't hear you. Try again.", "I need the microphone to hear you.",
 }
 WALKER_PHRASES |= {f"Sure thing. Let's find the {t}." for t in pipeline.FIND_TARGETS}
+# Find's arrival line, with where to reach. Mirrors reachPhrase() in app/App.tsx.
+REACH_PHRASES = {
+    f"You're there. Reach forward{side}{height}."
+    for side in ("", " and a little left", " and a little right")
+    for height in ("", ", at head height", ", at chest height", ", at waist height", ", at knee height", ", near the floor")
+}
 # Find: keeping the target in the picture up and down. Mirrors tiltPhrase and offFramePhrase in app/App.tsx.
 FRAMING_PHRASES = {
     "Tilt the phone down a little.", "Tilt the phone up a little.",
@@ -185,7 +191,7 @@ FRAMING_PHRASES = {
 }
 GUIDE_PHRASES = (
     guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES | DETOUR_PHRASES | STATUS_PHRASES
-    | WALKER_PHRASES | FRAMING_PHRASES
+    | WALKER_PHRASES | FRAMING_PHRASES | REACH_PHRASES
 )
 
 
