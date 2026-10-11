@@ -219,6 +219,10 @@ const detourClearPhrase = (stepped: 'left' | 'right') =>
   `Clear. Now turn ${stepped === 'left' ? 'right' : 'left'} until it's in front of you.`;
 // Centered and this close: you've arrived. Find stops and says to reach forward.
 const ARRIVE_DISTANCE_M = 0.7;
+// Also arrived when the centered box is at least this wide (fraction of the frame): metric depth
+// is unreliable inches from a textureless object (it read 2 m with the dragon at the lens), but a
+// box this big only happens within reach.
+const ARRIVE_BOX_WIDTH = 0.6;
 const arrivalPhrase = (target: string, openVocab: boolean) =>
   openVocab
     ? "You're there. It's right in front of you."
@@ -1441,7 +1445,9 @@ export default function App() {
     if (data.found && data.bearing_deg !== null) {
       findMisses.current = 0;
       setFindInfo(data);
-      if (data.centered && data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M) {
+      const nearByDepth = data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M;
+      const nearBySize = data.box !== null && data.box[2] >= ARRIVE_BOX_WIDTH;
+      if (data.centered && (nearByDepth || nearBySize)) {
         arrive(target);
         return;
       }
