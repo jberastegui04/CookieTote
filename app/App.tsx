@@ -267,6 +267,26 @@ const isUrgent = (s: Situation | null) =>
 // Said when Find starts. On the /say list for every target (STATUS_PHRASES in backend/main.py).
 const findingPhrase = (target: string) => `Finding ${target}. Turn slowly.`;
 const FINDING_IT = 'Finding it. Turn slowly.';
+// The server's "how far" wording (_find_how_far in backend/pipeline.py), for when the app corrects
+// the distance up close (track.near in tracker.ts). Same words, so the result stays on the /say list.
+function howFar(meters: number, units: Units): string {
+  if (meters <= 0.5) return 'very close';
+  if (units === 'feet') {
+    const raw = meters * 3.28084;
+    const feet = raw < 10 ? Math.round(raw) : 5 * Math.round(raw / 5);
+    return `about ${feet} ${feet === 1 ? 'foot' : 'feet'}`;
+  }
+  const m = meters < 3.25 ? Math.round(meters * 2) / 2 : Math.round(meters);
+  return `about ${m} ${m === 1 ? 'meter' : 'meters'}`;
+}
+// "Found it, ahead, about 2 meters." with its distance replaced.
+function withHowFar(sentence: string, meters: number, units: Units): string {
+  const parts = sentence.slice(0, -1).split(', ');
+  return parts.length === 3 ? `${parts[0]}, ${parts[1]}, ${howFar(meters, units)}.` : sentence;
+}
+// An obstacle in the target's direction, no nearer than the target less this, is the target
+// (FIND_SELF_M in pipeline.py; the app repeats the check once it has corrected the distance).
+const FIND_SELF_M = 0.6;
 const arrivalPhrase = (target: string, openVocab: boolean) =>
   openVocab
     ? "You're there. It's right in front of you."
@@ -1856,6 +1876,14 @@ export default function App() {
       notify(Haptics.NotificationFeedbackType.Success);
       lockSound.seekTo(0).then(() => lockSound.play()).catch(() => {});
     }
+    // Up close the depth model overstates the distance (it read 2 m with the object at the lens).
+    // By then the tracker has learned the object's real size and reads the distance off its box
+    // (track.near). When it has one for this frame's object, that replaces the server's number in
+    // the sentence, the arrival check, and the "is that obstacle just the target" check below.
+    const near = trackRef.current?.matched === candidates[0] ? (trackRef.current?.near ?? null) : null;
+    if (data.found && near !== null) {
+      data = { ...data, distance_m: near, sentence: withHowFar(data.sentence, near, guideSettings().units ?? 'meters') };
+    }
     // Once locked, the voice follows the track, not the frame. The open-vocabulary detector's
     // score for a small or oddly worded target wanders in and out of "no match" from frame to
     // frame, which used to say "No match yet. Turn slowly." right after the lock chime. A locked
@@ -1905,8 +1933,16 @@ export default function App() {
     }
     // Approach only: in Search the phone is swinging round, and a wall 3 m ahead would be
     // announced mid-turn (movingSince trips on the swing, not just on walking).
+    // The server already drops an obstacle that is the target itself, by comparing depths, which
+    // fails for the same reason up close ("Stop" with the thing you asked for in front of you).
+    // With the corrected distance: nothing nearer than the target, in its direction, is in the way.
+    const isTarget =
+      near !== null &&
+      o.distance_m !== null &&
+      (o.direction ?? 'ahead') === data.direction &&
+      near <= o.distance_m + FIND_SELF_M;
     const reading =
-      phase === 'approach' && !o.clear && o.distance_m !== null
+      phase === 'approach' && !o.clear && o.distance_m !== null && !isTarget
         ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
         : null;
     const danger = phase === 'approach' && reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
