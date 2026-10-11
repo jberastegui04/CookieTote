@@ -43,7 +43,12 @@ export const LINES = {
 export const MENU = {
   sections: 'Settings. Say a section: distance, sound and touch, or help. Or say done to go back.',
   closing: 'Closing settings.',
-  distanceAsk: 'Say close, normal, or far. Or feet, or meters. Or say done to go back.',
+  distanceAsk: 'Say units, or obstacle detection. Or say done to go back.',
+  // A setting named on its own ("units"): its choices. The answer changes it ("feet" -> "Units: feet.").
+  unitsAsk: 'Units. Say meters, or feet.',
+  warnAsk: 'Obstacle detection. Say close, normal, or far.',
+  hapticsAsk: 'Haptics. Say on, or off.',
+  speedAsk: 'Speech speed. Say faster, or slower.',
   soundAsk: 'Say haptics on or off, faster or slower, or voice to pick a different one. Or say done to go back.',
   // The voice menu (say "voice"): every voice plays, then pick one by name, or record a new one.
   defaultVoices: 'Default voices.',
@@ -73,6 +78,15 @@ export const speedLine = (index: number) => `Speech speed: ${SPEEDS[index].name.
 export const voiceLine = (name: string) => `Voice: ${name}.`;
 
 export type Section = 'distance' | 'sound' | 'help';
+// The settings with a fixed list of choices, and what Walker asks when one is named without a value.
+export type SettingName = 'units' | 'warning' | 'haptics' | 'speed';
+export const SETTING_ASK: Record<SettingName, string> = {
+  units: MENU.unitsAsk,
+  warning: MENU.warnAsk,
+  haptics: MENU.hapticsAsk,
+  speed: MENU.speedAsk,
+};
+export const SETTING_SECTION: Record<SettingName, Section> = { units: 'distance', warning: 'distance', haptics: 'sound', speed: 'sound' };
 export type SettingChange =
   | { kind: 'units'; units: Units }
   | { kind: 'warning'; warning: Warning }
@@ -163,7 +177,7 @@ export function sectionFromSpeech(heard: string): Section | 'done' | 'back' | nu
   const text = words(heard).join(' ');
   if (has(text, ['done', 'close', 'exit', 'finish', 'finished', "that's all", "that's it", 'nothing'])) return 'done';
   if (has(text, ['back', 'go back'])) return 'back';
-  if (has(text, ['distance', 'distances', 'units', 'warning', 'warnings', 'warn'])) return 'distance';
+  if (has(text, ['distance', 'distances', 'units', 'warning', 'warnings', 'warn', 'obstacle detection', 'obstacle', 'obstacles', 'detection'])) return 'distance';
   if (has(text, ['sound', 'touch', 'voice', 'voices', 'haptics', 'vibration', 'speed'])) return 'sound';
   if (has(text, ['help', 'limits', "can't see", 'cannot see'])) return 'help';
   return null;
@@ -179,8 +193,8 @@ export function settingFromSpeech(heard: string, voices: Voice[]): SettingChange
     if (has(text, OFF_WORDS)) return { kind: 'haptics', on: false };
     if (has(text, ON_WORDS)) return { kind: 'haptics', on: true };
   }
-  if (has(text, ['faster', 'quicker', 'speed up'])) return { kind: 'speed', delta: 1 };
-  if (has(text, ['slower', 'slow down'])) return { kind: 'speed', delta: -1 };
+  if (has(text, ['faster', 'fast', 'quicker', 'speed up'])) return { kind: 'speed', delta: 1 };
+  if (has(text, ['slower', 'slow', 'slow down'])) return { kind: 'speed', delta: -1 };
   if (has(text, ['rename', 'change the name', 'new name', 'call it'])) {
     const byLength = [...voices].sort((a, b) => b.name.length - a.name.length);
     return { kind: 'rename', voice: byLength.find((x) => has(text, [words(x.name).join(' ')])) ?? null };
@@ -196,6 +210,17 @@ export function settingFromSpeech(heard: string, voices: Voice[]): SettingChange
   if (has(text, ['normal'])) return { kind: 'warning', warning: 'normal' };
   if (has(text, ['close', 'closer'])) return { kind: 'warning', warning: 'close' };
   if (has(text, ['voice', 'voices', 'different voice', 'change voice', 'my voice'])) return { kind: 'voices' };
+  return null;
+}
+
+// A setting named with no value ("units", "obstacle detection", "haptics", "speed"), or null. Used
+// after settingFromSpeech found no change, so "haptics off" and "feet" never get here.
+export function settingNamed(heard: string): SettingName | null {
+  const text = words(heard).join(' ');
+  if (has(text, ['units', 'unit', 'measurement', 'measurements'])) return 'units';
+  if (has(text, ['obstacle detection', 'obstacle', 'obstacles', 'detection', 'warn me', 'warning', 'warnings', 'warn'])) return 'warning';
+  if (has(text, ['haptics', 'haptic', 'vibration', 'vibrate'])) return 'haptics';
+  if (has(text, ['speech speed', 'speed'])) return 'speed';
   return null;
 }
 

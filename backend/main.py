@@ -187,7 +187,10 @@ WALKER_PHRASES = {
     # Settings, hands free: mirrors MENU and the "Label: value." lines in app/walkerCommands.ts.
     "Settings. Say a section: distance, sound and touch, or help. Or say done to go back.",
     "Closing settings.",
-    "Say close, normal, or far. Or feet, or meters. Or say done to go back.",
+    "Say units, or obstacle detection. Or say done to go back.",
+    "Units. Say meters, or feet.", "Obstacle detection. Say close, normal, or far.",
+    "Haptics. Say on, or off.", "Speech speed. Say faster, or slower.",
+    "Say close, normal, or far. Or feet, or meters. Or say done to go back.",  # older builds
     "Say haptics on or off, faster or slower, or voice to pick a different one. Or say done to go back.",
     "Say haptics on or off, guidance voice on or off, faster or slower, or voice to pick a different one. "
     "Or say done to go back.",

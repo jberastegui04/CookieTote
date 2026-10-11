@@ -47,6 +47,10 @@ import {
   warnLine,
   type Section,
   type SettingChange,
+  SETTING_ASK,
+  SETTING_SECTION,
+  settingNamed,
+  type SettingName,
 } from './walkerCommands';
 import { trackUpdate, trackView, type Candidate, type Track } from './tracker';
 import Setup from './Setup';
@@ -1711,8 +1715,10 @@ export default function App() {
   // Settings, hands free (say "settings"): Walker lists the sections, reads the one you pick with its
   // current values ("Haptics: on."), then listens for changes ("feet", "haptics off", "faster").
   // "Voice" opens the voice menu: every voice plays, then pick one by name or record a new one.
-  // "Done" (or "back") goes back one level. Anything else is tried as another section, then as a
-  // normal command ("find the door" closes Settings and does it), so nothing is a dead end.
+  // A setting named on its own ("units") gets its choices read out ("Units. Say meters, or feet."),
+  // and the answer changes it. "Done" (or "back") goes back one level. Anything else is tried as
+  // another section, then as a normal command ("find the door" closes Settings and does it), so
+  // nothing is a dead end.
   // Ends when Settings closes, or after three silent tries.
   async function settingsMenu() {
     const live = () => settingsOpen.current;
@@ -1741,6 +1747,7 @@ export default function App() {
     };
     let lines: string[] = [MENU.sections];
     let silent = 0;
+    let pending: SettingName | null = null; // a setting was named; he asked for its choices
     // Default voices, then custom ones (each plays and says its own name), as on the screen.
     const enterVoices = async () => {
       setLevel('voices');
@@ -1775,7 +1782,7 @@ export default function App() {
         if (menuJump.current) continue;
         if (!heard) {
           silent += 1;
-          lines = [level === 'top' ? MENU.sections : level === 'voices' ? MENU.voiceAsk : askFor(level)];
+          lines = [pending ? SETTING_ASK[pending] : level === 'top' ? MENU.sections : level === 'voices' ? MENU.voiceAsk : askFor(level)];
           continue;
         }
         silent = 0;
@@ -1793,7 +1800,11 @@ export default function App() {
           lines = [LINES.didntCatch];
           continue;
         }
-        const change = settingFromSpeech(heard.text, voicesRef.current);
+        // "On" or "off" by itself means the setting he just asked about.
+        const change: SettingChange | null =
+          settingFromSpeech(heard.text, voicesRef.current) ??
+          (pending === 'haptics' ? settingFromSpeech(`haptics ${heard.text}`, voicesRef.current) : null);
+        pending = null;
         if (change?.kind === 'done' || change?.kind === 'back') {
           if (level === 'voices') {
             setLevel('sound');
@@ -1825,6 +1836,15 @@ export default function App() {
         }
         if (change && change.kind !== 'list') {
           lines = [await applyChange(change)]; // "Haptics: off." then listening again
+          continue;
+        }
+        // A setting named with no value: read its choices and wait for one. (Saying "units" used to
+        // count as asking for the Distance section, so he just read "Units: meters." again.)
+        const named: SettingName | null = change ? null : settingNamed(heard.text);
+        if (named) {
+          if (SETTING_SECTION[named] !== level) setLevel(SETTING_SECTION[named]);
+          pending = named;
+          lines = [SETTING_ASK[named]];
           continue;
         }
         // Not a setting here: another section ("distance"), or a normal command.
