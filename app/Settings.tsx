@@ -164,8 +164,8 @@ export default function Settings(p: Props) {
       <Enter key="voice" from={backFromEdit ? 'fade' : 'right'} style={styles.screen} accessibilityViewIsModal>
         <DotGrid />
         <Header
-          title="Voice"
-          sub="Tap one to hear it."
+          title="Walker's voice"
+          sub="He uses it for everything. Tap one to hear it."
           onBack={() => setPage('main')}
           backHint="Returns to settings"
         />
@@ -252,9 +252,9 @@ export default function Settings(p: Props) {
           onChange={(v) => p.onPrefs({ haptics: v })}
         />
         <LinkRow
-          label="Voice"
+          label="Walker's voice"
           value={voiceName}
-          hint="Opens the list of voices"
+          hint="Opens the list of voices. Walker, the guide and Find all use the one you pick."
           onPress={() => setPage('voice')}
         />
         <SpeedSlider value={p.prefs.speed} onChange={(i) => p.onPrefs({ speed: i })} />

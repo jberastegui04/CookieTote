@@ -5,8 +5,8 @@ import type { Units, Warning } from './prefs';
 
 type Voice = { id: string; name: string };
 
-// Everything Walker can say. He says these in his own ElevenLabs voice, so each one is on the
-// server's /say list (WALKER_PHRASES in backend/main.py); keep the two in sync.
+// Everything Walker can say. He says these in the chosen voice (his own unless changed in Settings),
+// so each one is on the server's /say list (WALKER_PHRASES in backend/main.py); keep the two in sync.
 export const WALKER_HELP =
   'You can say: find the door. Start walking, or stop. What is in front of me. Repeat that. ' +
   'Units feet, or meters. Warn me early, normal, or close. Use, and a voice name. Or settings.';
@@ -31,11 +31,12 @@ export const LINES = {
   didntCatch: "Sorry, I didn't catch that.",
   cantHear: "Sorry, I couldn't hear you. Try again.",
   mic: 'I need the microphone to hear you.',
-  // Setup: after Get started, and when the camera opens after Finish.
-  introVoice:
-    "Hey, I'm Walker. I'll help you find things and get around. First, pick the voice that guides you. Tap one to hear it.",
+  // Setup: on the welcome poster (welcomeVO goes through VoiceOver, so it needn't be on the /say
+  // list), then on the camera screen once setup is done.
+  welcome: 'Welcome to Cyclops. Tap anywhere to begin.',
+  welcomeVO: 'Welcome to Cyclops. Double tap anywhere to begin.',
   introHowTo:
-    "You're all set. Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: find the door. Ask me for help any time.",
+    "You're all set. Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: find the door. You can change my voice in Settings. Ask me for help any time.",
 };
 // For the 13 known targets; anything else is LINES.findIt.
 export const findLine = (target: string) => `Sure thing. Let's find the ${target}.`;

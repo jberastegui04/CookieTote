@@ -327,9 +327,10 @@ const WALKER_SILENCE_MS = 1100; // quiet this long after speaking: done
 const WALKER_SPEECH_DB = 15; // this many dB over the quietest level so far counts as talking
 const WALKER_QUIET_DB = 8; // back under this counts as a pause
 const WALKER_WAIT_MS = 3000; // how long he waits for the guide or Find to finish talking first
-// His own voice, never the user's chosen guide voice: "Chris", a relaxed American ElevenLabs voice
-// (his lines are on the server's /say list). If ElevenLabs can't be reached, a built-in American
-// voice, a little slower and lower: the first of these the phone has, the better quality first.
+// One voice for everything: Walker, the guide and Find all speak in the chosen voice, which starts as
+// Walker's own, "Chris", a relaxed American ElevenLabs voice. It's changed in Settings. His lines are
+// on the server's /say list. If ElevenLabs can't be reached, or Guidance voice is off, a built-in
+// American voice, a little slower and lower: the first of these the phone has, better quality first.
 const WALKER_VOICE_ID = 'iP95p4xoKVk53GoZ742B';
 const WALKER_FALLBACK_VOICES = ['Evan', 'Nathan', 'Tom', 'Alex', 'Aaron'];
 const WALKER_FALLBACK_RATE = 0.92;
@@ -567,13 +568,14 @@ export default function App() {
   // "Say the name" for a trusted voice: same 3 second recording and /transcribe as Find.
   const [newVoiceId, setNewVoiceId] = useState<string | null>(null); // Settings opens it to be named
   const [nameState, setNameState] = useState<'idle' | 'listening' | 'working'>('idle');
-  const [voiceId, setVoiceId] = useState<string | null>(null);
+  const [voiceId, setVoiceId] = useState<string | null>(WALKER_VOICE_ID);
   // The chosen voice has to exist. If it was deleted, here or on another phone, go back to the
   // default one instead of quietly speaking in the phone's own voice.
   useEffect(() => {
     if (voices.length && voiceId && !voices.some((v) => v.id === voiceId)) fallBackToDefaultVoice();
   }, [voices, voiceId]);
-  const voiceIdRef = useRef<string | null>(null);
+  // Walker's voice until the user picks another in Settings; one voice for everything.
+  const voiceIdRef = useRef<string | null>(WALKER_VOICE_ID);
   const screenReader = useRef(false);
   const [cloneStep, setCloneStep] = useState<CloneStep>('idle');
   const cloneStepRef = useRef<CloneStep>('idle');
@@ -773,10 +775,6 @@ export default function App() {
       .catch(() => {});
     loadVoices()
       .then((data) => {
-        if (!voiceIdRef.current) {
-          voiceIdRef.current = data.default;
-          setVoiceId(data.default);
-        }
         fetchPhrase(SCANNING); // so the first "Scanning." is already in the chosen voice
         prefetchWalker();
       })
@@ -794,14 +792,7 @@ export default function App() {
 
   if (!setupDone) {
     return (
-      <Setup
-        voices={voices}
-        voiceId={voiceId}
-        onPickVoice={pickVoice}
-        onStart={() => walkerReply(LINES.introVoice)}
-        onFinish={finishSetup}
-        walker={<WalkerBubble state={walkerState} text={walkerText} />}
-      />
+      <Setup onShown={welcomeCue} onFinish={finishSetup} />
     );
   }
 
@@ -897,6 +888,14 @@ export default function App() {
     modeRef.current = next;
     setMode(next);
     AsyncStorage.setItem(MODE_KEY, next).catch(() => {});
+  }
+
+  // The welcome poster is up: after a moment (so VoiceOver can read the screen first), Walker says to
+  // tap anywhere. With VoiceOver on he says "double tap", which is what VoiceOver needs.
+  function welcomeCue() {
+    setTimeout(() => {
+      walkerReply(screenReader.current ? LINES.welcomeVO : LINES.welcome);
+    }, 900);
   }
 
   function finishSetup() {
@@ -1584,7 +1583,7 @@ export default function App() {
       return isUrgent(s) && s!.key !== urgentBefore;
     };
     try {
-      const uri = await fetchPhrase(text, WALKER_VOICE_ID);
+      const uri = prefsRef.current.speech ? await fetchPhrase(text) : null; // the chosen voice
       if (uri) {
         walkerPlaying.current = true;
         player.replace({ uri });
@@ -1628,8 +1627,8 @@ export default function App() {
 
   // Walker's most likely first lines, in his voice, so his first answer isn't late.
   async function prefetchWalker() {
-    for (const text of [LINES.introVoice, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.guideOn, LINES.guideOff, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
-      await fetchPhrase(text, WALKER_VOICE_ID);
+    for (const text of [LINES.welcome, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.guideOn, LINES.guideOff, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
+      await fetchPhrase(text);
     }
   }
 

@@ -175,9 +175,9 @@ WALKER_PHRASES = {
     "Units feet, or meters. Warn me early, normal, or close. Use, and a voice name. Or settings.",
     "Sorry, say help for options.", "Yeah? What do you need?", "Sorry, I didn't catch that.",
     "Sorry, I couldn't hear you. Try again.", "I need the microphone to hear you.",
-    "Hey, I'm Walker. I'll help you find things and get around. First, pick the voice that guides you. Tap one to hear it.",
+    "Welcome to Cyclops. Tap anywhere to begin.",
     "You're all set. Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: "
-    "find the door. Ask me for help any time.",
+    "find the door. You can change my voice in Settings. Ask me for help any time.",
 }
 WALKER_PHRASES |= {f"Sure thing. Let's find the {t}." for t in pipeline.FIND_TARGETS}
 # Find's arrival line, with where to reach. Mirrors reachPhrase() in app/App.tsx.

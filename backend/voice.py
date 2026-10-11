@@ -12,6 +12,9 @@ MODEL_ID = "eleven_flash_v2_5"
 # Short list for the app's voice picker. All premade ElevenLabs voices. The first is the default
 # unless ELEVENLABS_VOICE_ID is set in .env.
 VOICES = [
+    # Walker, the voice assistant, and the app's default voice ("Chris": relaxed, American). Mirrors
+    # WALKER_VOICE_ID in app/App.tsx.
+    {"id": "iP95p4xoKVk53GoZ742B", "name": "Walker"},
     {"id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah"},
     {"id": "Xb7hH8MSUJpSbSDYk0k2", "name": "Alice"},
     {"id": "SAz9YHcvj6GT2YYXdXww", "name": "River"},
