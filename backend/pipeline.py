@@ -595,13 +595,11 @@ def find(
     warn_m = max(warn_distance(mode, warning), FIND_OBSTACLE_M * WARNING_SCALE[warning])
     mask = obstacle_mask(depth)
     if result["found"] and target_distance is not None:
-        # Walking toward the chair, the nearest thing ahead is the chair. Not an obstacle. Its pixels
-        # are the ones inside its box at about its distance (or behind it); anything clearly nearer,
-        # like a box on the floor in front of it, still counts. This used to drop any obstacle in the
-        # target's direction within FIND_SELF_M of its distance, which hid exactly that box.
-        bx, by, bw, bh = result["box"]
-        rows, cols = _rows(depth, (by, by + bh)), _cols(depth, (bx, bx + bw))
-        mask[rows, cols] &= depth[rows, cols] < target_distance - FIND_SELF_M
+        # Only what's clearly nearer than the target can be in the way: you stop when you get there.
+        # That leaves out the target itself, and a wall beside or behind it, which used to start a
+        # detour ("something close on your left") just before arriving. A box on the floor in front of
+        # it still counts. Both distances come from this depth map, so its overreading up close cancels.
+        mask &= depth < target_distance - FIND_SELF_M
     obstacle = _sonar_result(depth, warn_m, mask)
     obstacle["low"] = low_obstacle(depth, mask, warn_m)
     result["obstacle"] = obstacle
@@ -655,7 +653,8 @@ FIND_MAX_CANDIDATES = 5
 # While finding, the user is looking at the target, not the path, so obstacles ahead are reported
 # from further out than the guide's indoor 2 m (scaled by "Warn me"): about 3.5 m by default.
 FIND_OBSTACLE_M = 3.5
-# Pixels inside the target's box no nearer than its distance less this are the target itself.
+# Once the target is found, obstacles only count this much nearer than it (the target, and walls
+# beside or behind it, are no farther).
 FIND_SELF_M = 0.6
 
 

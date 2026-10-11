@@ -1965,11 +1965,19 @@ export default function App() {
     // Obstacles only matter in Approach: in Search you're standing still and turning, and the
     // warnings were noise. Something close (or a stop) starts a detour: step sideways, keep the
     // phone on the target, and turn back once the obstacle reads clear for a couple of answers.
-    const o = data.obstacle;
+    // Only what's clearly nearer than the target can be in the way (a wall beside it isn't). The
+    // server leaves the rest out when it detected the target this frame; when only the tracker has
+    // it, the same check here against the tracked distance (the server's depth, so the same scale).
+    const trackedAt = !serverFound && data.found ? data.distance_m : null;
+    const pastTarget = (d: number | null) => trackedAt !== null && d !== null && d >= trackedAt - FIND_SELF_M;
+    const o = pastTarget(data.obstacle.distance_m)
+      ? { ...data.obstacle, clear: true, distance_m: null, direction: null, open: null }
+      : data.obstacle;
     // A low obstacle near enough to act on (see LOW_DETOUR_M), unless it's the target itself.
     const low =
       o.low &&
       (o.low.edge || o.low.distance_m <= LOW_DETOUR_M * WARNING_SCALE[guideSettings().warning ?? 'normal']) &&
+      !pastTarget(o.low.distance_m) &&
       !(!serverFound && data.box && insideFraction(o.low.box, data.box) >= LOW_IN_TARGET)
         ? o.low
         : null;
