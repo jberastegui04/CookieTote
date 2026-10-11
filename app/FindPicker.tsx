@@ -55,7 +55,7 @@ export default function FindPicker(p: Props) {
         <Section title="SAY IT" />
         <LinkRow
           label={SPEAK_LABEL[p.speakState]}
-          hint='Records for three seconds. Say something like "find the chair".'
+          hint='Listens until you stop talking. Say something like "find the chair".'
           onPress={p.onSpeak}
           active={p.speakState !== 'idle'}
         />

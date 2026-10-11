@@ -108,7 +108,7 @@ export default function Settings(p: Props) {
           <Section title="NAME" />
           <LinkRow
             label={SAY_NAME_LABEL[p.nameState]}
-            hint='Records for three seconds. Say just the name, like "Mom".'
+            hint='Listens until you stop talking. Say just the name, like "Mom".'
             onPress={async () => {
               const name = await p.onSayName();
               if (name) p.onRenameVoice(editing.id, name);

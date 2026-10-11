@@ -837,8 +837,9 @@ export default function App() {
     }
   }
 
-  // Records 3 seconds and returns what was said, cleaned up for a name ("mom." -> "Mom"). Null if
-  // nothing was heard. Blind users can also type with VoiceOver or the keyboard's dictation key.
+  // Records until you stop talking (listenUntilQuiet) and returns what was said, cleaned up for a
+  // name ("mom." -> "Mom"). Null if nothing was heard. Blind users can also type with VoiceOver or
+  // the keyboard's dictation key.
   async function sayName(): Promise<string | null> {
     if (nameState !== 'idle') return null;
     const { granted } = await requestRecordingPermissionsAsync();
@@ -853,10 +854,16 @@ export default function App() {
       recorder.record();
       await buzz(Haptics.ImpactFeedbackStyle.Medium);
       AccessibilityInfo.announceForAccessibility('Listening');
-      await sleep(3000);
+      walkerDone.current = false; // listenUntilQuiet also stops on Walker's tap-again flag
+      const heard = await listenUntilQuiet();
       await recorder.stop();
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
       await buzz(Haptics.ImpactFeedbackStyle.Light);
+      if (heard.interrupted || !heard.spoke) {
+        setNameState('idle');
+        tell('Could not hear the name. Try again, or type it.');
+        return null;
+      }
       if (!recorder.uri) throw new Error('No recording');
       setNameState('working');
       const form = new FormData();
@@ -1409,8 +1416,10 @@ export default function App() {
     }
   }
 
-  // Tap, say "find the red bench", done. Records for 3 seconds, sends it to /transcribe, and
-  // starts Find with what came back. Works with VoiceOver because nothing has to be held.
+  // Tap, say "find the red bench", done. Records until you stop talking (listenUntilQuiet, the same
+  // as Walker: about a second of quiet ends it, so a slow speaker isn't cut off and a quick one
+  // doesn't wait), sends it to /transcribe, and starts Find with what came back. Works with
+  // VoiceOver because nothing has to be held.
   async function speakToFind() {
     if (speakState !== 'idle') return;
     const { granted } = await requestRecordingPermissionsAsync();
@@ -1425,10 +1434,17 @@ export default function App() {
       recorder.record();
       await buzz(Haptics.ImpactFeedbackStyle.Medium);
       AccessibilityInfo.announceForAccessibility('Listening');
-      await sleep(3000);
+      walkerDone.current = false; // listenUntilQuiet also stops on Walker's tap-again flag
+      const heard = await listenUntilQuiet();
       await recorder.stop();
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
       await buzz(Haptics.ImpactFeedbackStyle.Light);
+      if (heard.interrupted || !heard.spoke) {
+        // Nothing said, or a safety warning started over it: don't send an empty or mixed clip.
+        setSpeakState('idle');
+        tell("I didn't catch what to find. Try again, like: find the red chair.");
+        return;
+      }
       if (!recorder.uri) throw new Error('No recording');
       setSpeakState('working');
       const form = new FormData();
