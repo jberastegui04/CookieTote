@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Animated, Easing, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, Easing, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Tap } from './controls';
+import { tapHaptic } from './feedback';
 import { formatDistance, type Units } from './prefs';
 import { capitalize, HALF_FOV_DEG, type FindResult } from './find';
 import { Enter, useReduceMotion } from './motion';
@@ -43,6 +44,8 @@ type Props = {
   result: FindResult | null; // newest POST /find answer; null until the first one arrives
   cameraPicture: boolean; // false: plain white screen with bigger text (camera still runs underneath)
   onStop: () => void;
+  paused?: boolean; // Walker has the floor; Find picks up again when he's done
+  onHold?: () => void; // press and hold anywhere: talk to Walker (Find pauses)
   walker?: ReactNode; // Walker's button, next to Stop finding
   walkerBubble?: ReactNode; // what Walker is doing, above the buttons
 };
@@ -59,7 +62,9 @@ export default function FindScreen(p: Props) {
   const name = capitalize(p.target);
   const found = r?.found === true;
 
-  const headline = !r
+  const headline = p.paused
+    ? 'Paused'
+    : !r
     ? 'Looking…'
     : !found
       ? p.description
@@ -74,8 +79,8 @@ export default function FindScreen(p: Props) {
             : 'Almost facing it';
   // With a description: how well what's in view fits it. Only while it's actually in the frame.
   const matchNote = p.description && found && r.box ? (r.match === 'yes' ? 'Looks like a match' : r.match === 'possible' ? 'Possible match' : null) : null;
-  const detail = !found ? 'Turn slowly' : matchNote;
-  const arrow = found && r.direction ? ARROW[r.direction] : null;
+  const detail = p.paused ? 'Walker is listening' : !found ? 'Turn slowly · Hold to talk to Walker' : matchNote;
+  const arrow = !p.paused && found && r.direction ? ARROW[r.direction] : null;
   const distance = found && r.distance_m != null ? `${formatDistance(r.distance_m, p.units)} away` : null;
 
   // Bearing meter: where the target sits left to right, from -26 to 26 degrees.
@@ -158,6 +163,19 @@ export default function FindScreen(p: Props) {
           </View>
         </View>
       </View>
+
+      {/* Press and hold anywhere to talk to Walker: no small button to find while searching. */}
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onLongPress={() => {
+          tapHaptic();
+          p.onHold?.();
+        }}
+        delayLongPress={500}
+        accessibilityRole="button"
+        accessibilityLabel={`Finding ${p.description ?? p.target}`}
+        accessibilityHint="Double tap and hold to talk to Walker, to find something else or stop"
+      />
 
       <View style={styles.bottom} pointerEvents="box-none">
         {p.walkerBubble}

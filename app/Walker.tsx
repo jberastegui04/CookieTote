@@ -5,7 +5,7 @@ import { Tap } from './controls';
 import { useReduceMotion } from './motion';
 import { C, font, SPACE } from './theme';
 
-// Walker, the voice assistant: tap him, say what you need ("find the little green dragon"), and he
+// Walker, the voice assistant: press and hold anywhere (or tap him), say what you need ("find the little green dragon"), and he
 // answers in his own voice and does it. He has his own color (light blue) as well as his own
 // voice, so he's never mistaken for the guide.
 export type WalkerState = 'idle' | 'listening' | 'thinking' | 'talking';
@@ -61,8 +61,7 @@ function usePulse(state: WalkerState, reduce: boolean) {
 }
 
 // The round Walker button next to Find and Guide (and next to Stop finding).
-// armed: hands-free "Hey Walker" is on; a small dot on the button says he can hear his name.
-export function WalkerButton(p: { state: WalkerState; onPress: () => void; size: number; armed?: boolean }) {
+export function WalkerButton(p: { state: WalkerState; onPress: () => void; size: number }) {
   const reduce = useReduceMotion();
   const pulse = usePulse(p.state, reduce);
   const filled = p.state === 'listening' || p.state === 'talking';
@@ -84,18 +83,17 @@ export function WalkerButton(p: { state: WalkerState; onPress: () => void; size:
         onPress={p.onPress}
         accessibilityRole="button"
         accessibilityLabel="Walker"
-        accessibilityValue={{ text: p.state !== 'idle' ? STATE_TEXT[p.state] : p.armed ? 'Listening for Hey Walker' : '' }}
+        accessibilityValue={{ text: p.state !== 'idle' ? STATE_TEXT[p.state] : '' }}
         accessibilityHint={
           p.state === 'listening'
             ? 'Double tap to stop listening'
             : p.state === 'idle'
-              ? 'Or say Hey Walker. Then say what you need, like: find the red chair, or start walking'
+              ? 'Or press and hold anywhere. Then say what you need, like: find the red chair, or start walking'
               : 'Double tap to stop Walker'
         }
       >
         <WalkerIcon size={p.size * 0.56} color={filled ? C.onWalker : C.walker} talking={p.state === 'talking'} />
       </Tap>
-      {p.armed && p.state === 'idle' ? <View style={styles.armed} pointerEvents="none" /> : null}
     </View>
   );
 }
@@ -120,17 +118,6 @@ const styles = StyleSheet.create({
   outline: { backgroundColor: C.glass, borderWidth: 2, borderColor: C.walker },
   filled: { backgroundColor: C.walker },
   thinking: { borderWidth: 3 },
-  armed: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: C.walker,
-    borderWidth: 3,
-    borderColor: C.bg,
-  },
   bubble: {
     flexDirection: 'row',
     alignItems: 'center',

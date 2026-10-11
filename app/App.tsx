@@ -30,7 +30,7 @@ import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
 import { WalkerBubble, WalkerButton, type WalkerState } from './Walker';
-import { findLine, LINES, parseCommand, saidWalker } from './walkerCommands';
+import { findLine, LINES, parseCommand } from './walkerCommands';
 import { trackUpdate, trackView, type Candidate, type Track } from './tracker';
 import Setup, { type Vision } from './Setup';
 import { DEFAULT_PREFS, formatDistance, SPEEDS, type Prefs } from './prefs';
@@ -251,15 +251,7 @@ const WALKER_VOICE_ID = 'iP95p4xoKVk53GoZ742B';
 const WALKER_FALLBACK_VOICES = ['Evan', 'Nathan', 'Tom', 'Alex', 'Aaron'];
 const WALKER_FALLBACK_RATE = 0.92;
 const WALKER_FALLBACK_PITCH = 0.9;
-// Hands-free "Hey Walker" (Settings > Walker). Expo Go has no wake-word engine, so the app keeps a
-// short recording going and watches the level meter for talking. Only a clip with speech in it goes
-// to /transcribe, and Walker only acts if his name is in it.
-const WAKE_RESTART_MS = 4000; // nothing said this long: start a fresh clip, so clips stay small
-const WAKE_MIN_SPEECH_MS = 400; // shorter is a cough or a bump
-const WAKE_MAX_SPEECH_MS = 6000; // longer is a conversation, not a command: dropped
-const WAKE_SILENCE_MS = 900; // a pause this long ends what was said
-const WAKE_MIN_GAP_MS = 3000; // at most one clip to /transcribe this often (the limit is shared)
-type Heard = { text: string; heard?: string; target: string | null; description: string | null; open_vocab?: boolean };
+type Heard = { text: string; target: string | null; description: string | null; open_vocab?: boolean };
 // Safety speech that Walker never holds back or talks over: Stop, close-by warnings, detours.
 const isUrgent = (s: Situation | null) =>
   !!s && (s.stop || s.key.startsWith('close') || s.key.startsWith('detour'));
@@ -417,8 +409,6 @@ export default function App() {
   const cloneStepRef = useRef<CloneStep>('idle');
   // Metering gives Walker the sound level, so he can stop listening when you stop talking.
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
-  // A second recorder for hands-free "Hey Walker", so it never gets in the way of the one above.
-  const wakeRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
 
   // Guide mode. The loops below run for a long time, so they read refs instead of state.
   const [guideOn, setGuideOn] = useState(false);
@@ -488,14 +478,6 @@ export default function App() {
   const walkerHolds = useRef(false);
   const walkerVoice = useRef<string | undefined>(undefined); // identifier of his built-in fallback voice
   const walkerPlaying = useRef(false); // his ElevenLabs clip is on the player
-  const wakeGen = useRef(0); // bumped to stop the hands-free loop
-  const wakeRecording = useRef(false); // the hands-free clip has the microphone
-  const lastWakeSent = useRef(0);
-  const pickerOpen = useRef(false); // the Find picker is up (mirrors showTargets)
-  const otherMic = useRef(false); // spoken Find, naming or recording a voice has the microphone
-  // The audio mode only needs setting again after something else changed it (those recordings turn
-  // recording off when they finish); setting it on every clip could blip the audio playing.
-  const wakeNeedsMode = useRef(true);
   // Each start of Find, the voice loop, or the pulse loop bumps its counter, and an older copy still
   // running sees that and quits. So starting Find again while finding (Walker: "find the door") never
   // leaves two loops talking at once.
@@ -610,22 +592,6 @@ export default function App() {
       sub.remove();
     };
   }, []);
-
-  // Hands-free "Hey Walker" runs while it's on in Settings and the camera screen is up.
-  useEffect(() => {
-    pickerOpen.current = showTargets;
-  }, [showTargets]);
-  useEffect(() => {
-    otherMic.current = speakState !== 'idle' || nameState !== 'idle' || cloneStep !== 'idle';
-    if (!otherMic.current) wakeNeedsMode.current = true;
-  }, [speakState, nameState, cloneStep]);
-  useEffect(() => {
-    if (!setupDone || !permission?.granted || !prefs.heyWalker) return;
-    wakeLoop();
-    return () => {
-      wakeGen.current++;
-    };
-  }, [setupDone, permission?.granted, prefs.heyWalker]);
 
   // If the font fails to load, carry on with the system font rather than a blank screen.
   if (setupDone === null || (!fontsLoaded && !fontError)) return <View style={[styles.screen, styles.blank]} />;
@@ -774,6 +740,7 @@ export default function App() {
   function notify(type: Haptics.NotificationFeedbackType) {
     return prefsRef.current.haptics ? Haptics.notificationAsync(type) : Promise.resolve();
   }
+
 
   // No spoken echo here or in other taps: VoiceOver already reads the new state of what was tapped.
   function changeCameraPicture(on: boolean) {
@@ -1171,14 +1138,20 @@ export default function App() {
     return `${parts[0]}, ${where}, ${parts[2]}.`;
   }
 
+  // Walker has the floor: he's listening, thinking or talking, or someone has started talking to him
+  // hands-free. Find pauses completely meanwhile (no photos, voice or buzzing) and carries on after.
+  function walkerBusy() {
+    return walkerStateRef.current !== 'idle' || walkerHolds.current;
+  }
+
   function setWalker(state: WalkerState) {
     walkerStateRef.current = state;
     setWalkerState(state);
   }
 
-  // Walker: tap (or say "Hey Walker"), say what you need ("find the little green dragon", "start
-  // walking", "units feet"), and he answers in his own voice and does it. Tap again while he listens
-  // to stop early, or while he talks to stop him. Safety speech always wins: he waits for it, and
+  // Walker: press and hold anywhere (or tap his button), say what you need ("find the little green
+  // dragon", "start walking", "units feet"), and he answers in his own voice and does it. Again while
+  // he listens stops early; while he talks, stops him. Safety speech always wins: he waits for it, and
   // stops listening if it starts.
   async function walkerTap() {
     const state = walkerStateRef.current;
@@ -1218,42 +1191,42 @@ export default function App() {
     await walkerRespond(heard);
   }
 
-  // The audio mode between recordings: hands-free keeps the microphone ready (and playback on the
-  // speaker, not the earpiece).
+  // The audio mode after a recording: microphone off, playback on the speaker.
   function micIdle() {
-    return setAudioModeAsync({
-      allowsRecording: prefsRef.current.heyWalker,
-      playsInSilentMode: true,
-      shouldRouteThroughEarpiece: false,
-    }).catch(() => {});
+    return setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
   }
 
-  // Records one command and sends it to /transcribe. Null if that failed, 'interrupted' if safety
-  // speech started while recording.
+  // Records one command and sends it to /transcribe. Null if that failed or nothing was said,
+  // 'interrupted' if safety speech started while recording.
   async function walkerListen(): Promise<Heard | null | 'interrupted'> {
     try {
       walkerDone.current = false;
-      for (let i = 0; i < 20 && wakeRecording.current; i++) await sleep(50); // hands-free clip lets go first
       await waitForQuiet(); // don't record the guide's own voice
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldRouteThroughEarpiece: false });
       await recorder.prepareToRecordAsync();
       recorder.record();
       await buzz(Haptics.ImpactFeedbackStyle.Medium);
       AccessibilityInfo.announceForAccessibility('Listening');
-      const interrupted = await listenUntilQuiet();
-      await recorder.stop();
-      await micIdle();
-      await buzz(Haptics.ImpactFeedbackStyle.Light);
-      if (interrupted) return 'interrupted';
-      if (!recorder.uri) throw new Error('No recording');
-      setWalker('thinking');
-      return await transcribeClip(recorder.uri);
+      const heard = await finishCommand(await listenUntilQuiet());
+      return heard === 'silent' ? null : heard;
     } catch (e) {
       console.warn(e);
       await micIdle();
       notify(Haptics.NotificationFeedbackType.Error);
       return null;
     }
+  }
+
+  // Stops the command recording and sends it to /transcribe, unless nothing was said ('silent') or
+  // safety speech cut in ('interrupted').
+  async function finishCommand(r: { interrupted: boolean; spoke: boolean }): Promise<Heard | 'silent' | 'interrupted'> {
+    await recorder.stop().catch(() => {});
+    await micIdle();
+    await buzz(Haptics.ImpactFeedbackStyle.Light);
+    if (r.interrupted) return 'interrupted';
+    if (!r.spoke || !recorder.uri) return 'silent';
+    setWalker('thinking');
+    return await transcribeClip(recorder.uri);
   }
 
   async function transcribeClip(uri: string): Promise<Heard> {
@@ -1264,11 +1237,9 @@ export default function App() {
     return (await res.json()) as Heard;
   }
 
-  // What he does with what was heard, from a tap or hands-free. `heard` is everything said (newer
-  // servers); `text` is cut to start at the request, which loses "Hey Walker".
+  // What he does with what was heard.
   async function walkerRespond(h: Heard) {
-    const all = h.heard ?? h.text;
-    const cmd = parseCommand(saidWalker(all) ? all : h.text, voices);
+    const cmd = parseCommand(h.text, voices);
     if (cmd.action === 'wake') {
       await walkerReply(cmd.reply); // "Yeah? What do you need?"
       await walkerSession();
@@ -1304,16 +1275,16 @@ export default function App() {
   }
 
   // Records until you've spoken and then paused, you tap again, or WALKER_MAX_MS. Levels are in dB
-  // (about -160 to 0) and compared with the quietest moment so far, the room's own noise. Returns
-  // true if safety speech started meanwhile (the recording is then dropped).
-  async function listenUntilQuiet(): Promise<boolean> {
+  // (about -160 to 0) and compared with the quietest moment so far, the room's own noise. Says whether
+  // anyone spoke, and whether safety speech started meanwhile (the recording is then dropped).
+  async function listenUntilQuiet(noSpeechMs = WALKER_NO_SPEECH_MS): Promise<{ interrupted: boolean; spoke: boolean }> {
     const start = Date.now();
     let floor = Infinity;
     let spoke = false;
     let quietSince: number | null = null;
     while (!walkerDone.current && Date.now() - start < WALKER_MAX_MS) {
       await sleep(100);
-      if (speechBusy.current) return true;
+      if (speechBusy.current) return { interrupted: true, spoke };
       const level = recorder.getStatus().metering;
       if (level === undefined) continue;
       floor = Math.min(floor, level);
@@ -1322,12 +1293,12 @@ export default function App() {
         quietSince = null;
       } else if (spoke && level < floor + WALKER_QUIET_DB) {
         quietSince ??= Date.now();
-        if (Date.now() - quietSince > WALKER_SILENCE_MS) return false;
-      } else if (!spoke && Date.now() - start > WALKER_NO_SPEECH_MS) {
-        return false;
+        if (Date.now() - quietSince > WALKER_SILENCE_MS) return { interrupted: false, spoke };
+      } else if (!spoke && Date.now() - start > noSpeechMs) {
+        return { interrupted: false, spoke };
       }
     }
-    return false;
+    return { interrupted: false, spoke };
   }
 
   // Walker says something in his own voice, never the user's chosen one, and resolves when he's done.
@@ -1395,101 +1366,6 @@ export default function App() {
     for (const text of [LINES.yes, LINES.findIt, LINES.guideOn, LINES.guideOff, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
       await fetchPhrase(text, WALKER_VOICE_ID);
     }
-  }
-
-  // Hands-free "Hey Walker": one short clip at a time while nothing else is using the microphone or
-  // talking. A clip with speech in it goes to /transcribe; Walker answers only if his name is in it.
-  async function wakeLoop() {
-    const gen = ++wakeGen.current;
-    const { granted } = await requestRecordingPermissionsAsync();
-    if (!granted) return;
-    while (wakeGen.current === gen) {
-      if (!canWake()) {
-        await sleep(300);
-        continue;
-      }
-      let clip: 'speech' | 'none' = 'none';
-      wakeRecording.current = true;
-      try {
-        if (wakeNeedsMode.current) {
-          await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldRouteThroughEarpiece: false });
-          wakeNeedsMode.current = false;
-        }
-        await wakeRecorder.prepareToRecordAsync();
-        wakeRecorder.record();
-        clip = await wakeListen(gen);
-      } catch (e) {
-        console.warn(e);
-        wakeNeedsMode.current = true;
-        await sleep(1000);
-      } finally {
-        await wakeRecorder.stop().catch(() => {});
-        wakeRecording.current = false;
-        if (walkerStateRef.current === 'idle') walkerHolds.current = false;
-      }
-      if (clip !== 'speech' || !wakeRecorder.uri || Date.now() - lastWakeSent.current < WAKE_MIN_GAP_MS) continue;
-      lastWakeSent.current = Date.now();
-      try {
-        const h = await transcribeClip(wakeRecorder.uri);
-        if (saidWalker(h.heard ?? h.text) && canWake()) await walkerRespond(h);
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-  }
-
-  // Hands-free listens when nothing else needs the microphone, on the camera screen with the app open.
-  // It keeps listening while the guide or Find talks (they talk every few seconds, which would leave
-  // no gap for "Hey Walker"); wakeListen just doesn't count the app's own voice as someone talking.
-  function canWake() {
-    return (
-      prefsRef.current.heyWalker &&
-      walkerStateRef.current === 'idle' &&
-      !settingsOpen.current &&
-      !pickerOpen.current &&
-      !otherMic.current &&
-      AppState.currentState === 'active'
-    );
-  }
-
-  // Waits for someone talking, then for a pause after it. 'speech' if they said something short enough
-  // to be a command; 'none' to start a fresh clip. Loud moments while the app itself is talking don't
-  // count, so its own voice never gets a clip sent (and the app never says "Walker", so its voice in
-  // the background can't wake him). Once someone starts talking, the guide's and Find's routine
-  // sentences hold (walkerHolds) so they don't talk over the request; safety warnings still play.
-  async function wakeListen(gen: number): Promise<'speech' | 'none'> {
-    const start = Date.now();
-    let floor = Infinity;
-    let speechStart: number | null = null;
-    let quietSince: number | null = null;
-    while (wakeGen.current === gen) {
-      await sleep(100);
-      if (!canWake()) return 'none';
-      const now = Date.now();
-      const level = wakeRecorder.getStatus().metering;
-      if (level === undefined) {
-        if (now - start > WAKE_RESTART_MS) return 'none';
-        continue;
-      }
-      const appTalking = speechBusy.current || describePlaying();
-      if (!appTalking) floor = Math.min(floor, level);
-      if (level > floor + WALKER_SPEECH_DB) {
-        if (speechStart === null && !appTalking) {
-          speechStart = now;
-          walkerHolds.current = true;
-        }
-        quietSince = null;
-        if (speechStart !== null && now - speechStart > WAKE_MAX_SPEECH_MS) return 'none';
-      } else if (speechStart !== null && level < floor + WALKER_QUIET_DB) {
-        quietSince ??= now;
-        if (now - quietSince > WAKE_SILENCE_MS) {
-          return quietSince - speechStart >= WAKE_MIN_SPEECH_MS ? 'speech' : 'none';
-        }
-      } else if (speechStart === null && now - start > WAKE_RESTART_MS) {
-        return 'none';
-      }
-    }
-    return 'none';
   }
 
   // What Walker was asked to do. He has already said it, so nothing here announces it again.
@@ -1630,6 +1506,10 @@ export default function App() {
   async function pulseLoop() {
     const gen = ++pulseGen.current;
     while (findOnRef.current && pulseGen.current === gen) {
+      if (walkerBusy()) {
+        await sleep(200); // no buzzing while Walker listens or talks
+        continue;
+      }
       const off = targetOffset();
       const now = Date.now();
       if (findPhaseRef.current === 'search') {
@@ -1859,6 +1739,7 @@ export default function App() {
   }
 
   function applyFind(data: FindResult, headingAtCapture: number | null) {
+    if (walkerBusy()) return; // a frame from before Walker was called; Find is paused
     const target = findTargetRef.current ?? data.target;
     const phase = findPhaseRef.current;
     findBlanks.current = data.found ? 0 : findBlanks.current + 1;
@@ -2121,6 +2002,10 @@ export default function App() {
     };
 
     while (isOn()) {
+      if (endpoint === '/find' && walkerBusy()) {
+        await sleep(150); // Find pauses while Walker has the floor
+        continue;
+      }
       const started = Date.now();
       // No frames while a describe clip is playing (taking one can make it stutter), and no more
       // than GUIDE_IN_FLIGHT frames waiting on the server.
@@ -2205,7 +2090,9 @@ export default function App() {
     let lastSpokenAt = 0;
     while (loopsOn() && voiceGen.current === gen) {
       const s = situation.current;
-      if (!s || describePlaying() || speechBusy.current || (walkerHolds.current && !isUrgent(s))) {
+      // Routine sentences wait while someone is talking to Walker. Safety ones never wait.
+      const findPaused = findOnRef.current && walkerBusy();
+      if (!s || describePlaying() || speechBusy.current || findPaused || (!isUrgent(s) && walkerHolds.current)) {
         await sleep(100);
         continue;
       }
@@ -2456,7 +2343,7 @@ export default function App() {
 
   // Find and Guide side by side; Find is the main feature, so it comes first and is filled, the two things you start while walking.
   const walkerButton = (
-    <WalkerButton state={walkerState} onPress={walkerTap} size={cameraPicture ? 76 : 96} armed={prefs.heyWalker} />
+    <WalkerButton state={walkerState} onPress={walkerTap} size={cameraPicture ? 76 : 96} />
   );
   const walkerBubble = <WalkerBubble state={walkerState} text={walkerText} />;
 
@@ -2498,21 +2385,22 @@ export default function App() {
       <Pressable
         style={StyleSheet.absoluteFill}
         onPress={scan}
-        // Press and hold anywhere repeats the last warning. Works with or without VoiceOver
-        // (with it on, that's double-tap and hold). Magic tap still does the same.
+        // Press and hold anywhere talks to Walker (the Find screen has its own). Works with or
+        // without VoiceOver (with it on, that's double-tap and hold). Repeating the last warning is
+        // "Walker, repeat that", or the magic tap with VoiceOver.
         onLongPress={() => {
           tapHaptic();
-          repeatLast();
+          walkerTap();
         }}
         delayLongPress={600}
         accessibilityRole="button"
         accessibilityLabel="Describe what's ahead"
-        accessibilityHint="Double tap to scan. Double tap and hold to repeat the last warning."
+        accessibilityHint="Double tap to scan. Double tap and hold to talk to Walker."
         accessibilityState={{ busy: status === 'capturing' || status === 'thinking' }}
       />
 
       {findOn && findTarget ? (
-        <FindScreen target={findTarget} units={prefs.units} description={findDescriptionRef.current} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} walker={walkerButton} walkerBubble={walkerBubble} />
+        <FindScreen target={findTarget} units={prefs.units} description={findDescriptionRef.current} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} paused={walkerState !== 'idle'} onHold={walkerTap} walker={walkerButton} walkerBubble={walkerBubble} />
       ) : cameraPicture ? (
         <>
           {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}

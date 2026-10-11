@@ -60,7 +60,7 @@ export default function Setup(p: Props) {
                 ['Find', 'Say what you need. A voice leads you to it.'],
                 ['Guide', 'Warns you about what is ahead.'],
                 ['Tap anywhere', 'Hear what is in front of you.'],
-                ['Press and hold', 'Repeat the last warning.'],
+                ['Press and hold', 'Talk to Walker. Say what you need.'],
               ].map(([t, b]) => (
                 <View key={t} style={styles.howTo} accessible>
                   <Text style={styles.howToTitle}>{t}</Text>

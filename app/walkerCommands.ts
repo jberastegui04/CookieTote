@@ -37,7 +37,7 @@ export const findLine = (target: string) => `Sure thing. Let's find the ${target
 
 export type WalkerCommand =
   | { action: 'find' }
-  | { action: 'wake'; reply: string } // just "Hey Walker": he answers and listens for the command
+  | { action: 'wake'; reply: string } // just his name: he answers and listens for the command
   | { action: 'guide_on' | 'guide_off' | 'describe' | 'repeat' | 'settings' | 'stop' | 'none'; reply: string }
   | { action: 'units'; units: Units; reply: string }
   | { action: 'warning'; warning: Warning; reply: string }
@@ -68,9 +68,6 @@ function words(text: string): string[] {
 }
 
 const has = (text: string, phrases: string[]) => phrases.some((p) => new RegExp(`\\b${p}\\b`).test(text));
-
-// True if what was heard was said to Walker ("hey Walker ..."). Hands-free listening ignores the rest.
-export const saidWalker = (heard: string) => words(heard).some((w) => NAMES.includes(w));
 
 export function parseCommand(heard: string, voices: Voice[]): WalkerCommand {
   let w = words(heard);

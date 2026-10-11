@@ -5,13 +5,12 @@ export type Prefs = {
   speed: number; // index into SPEEDS, for spoken warnings
   warning: Warning; // the "Warn me" setting, sent with every request
   units: Units; // spoken sentences and on-screen distances
-  heyWalker: boolean; // listen for "Hey Walker" hands-free (off: tap the Walker button)
 };
 
 export type Warning = 'close' | 'normal' | 'early';
 export type Units = 'meters' | 'feet';
 
-export const DEFAULT_PREFS: Prefs = { speech: true, haptics: true, speed: 2, warning: 'normal', units: 'meters', heyWalker: true };
+export const DEFAULT_PREFS: Prefs = { speech: true, haptics: true, speed: 2, warning: 'normal', units: 'meters' };
 
 // distance_m from the server is always meters; this is what the screen shows.
 export function formatDistance(meters: number, units: Units) {
