@@ -79,7 +79,8 @@ type FindResult = {
   box: [number, number, number, number] | null;
   sentence: string;
   candidates?: Candidate[]; // every candidate this frame, best first; the tracker follows one
-  obstacle: SonarResult & { low?: LowObstacle | null }; // low: foot-height only (find.ts)
+  // low: foot-height only (find.ts). box: the nearest obstacle's outline, like LowObstacle's.
+  obstacle: SonarResult & { low?: LowObstacle | null; box?: [number, number, number, number] | null };
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
   locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
 };
@@ -232,9 +233,35 @@ const WALK_SUSTAIN_MS = 800;
 // the /say list (DETOUR_PHRASES in backend/main.py); change both together.
 // side is null when no side was confirmed open: then it only warns ("Stop. Something right in front
 // of you."), never "Step to your …", since stepping into space nobody checked is worse than stopping.
-// lowSeenAt: when a low obstacle (below) last kept this detour going, 0 if none did.
-type Detour = { side: 'left' | 'right' | null; startedAt: number; clearFrames: number; lowSeenAt: number };
+// lowSeenAt: when a low obstacle (below) last kept this detour going, 0 if none did. startX: the
+// obstacle box's center across the picture when the step was said; lastBox: its box last seen.
+// said: the step phrase, kept word for word while the detour lasts (the voice repeats new wording).
+type Detour = {
+  side: 'left' | 'right' | null;
+  startedAt: number;
+  clearFrames: number;
+  lowSeenAt: number;
+  startX: number | null;
+  startHeading: number | null; // the gyro heading then, so turning the phone isn't taken for a step
+  lastBox: [number, number, number, number] | null;
+  said: Situation | null;
+};
 const DETOUR_CLEAR_FRAMES = 2;
+// Dodged. Stepping left makes the obstacle slide right in the picture. Once its box is wholly on the
+// right half and has moved DODGE_SHIFT since the step was said, or it leaves the picture out the
+// right side (last seen center past DODGE_EXIT_X from the middle, touching the lane's right end), it's passed: "Clear. Now turn
+// right..." at once, instead of repeating the step. For DODGE_IGNORE_MS after, something wholly on
+// that half doesn't start a new detour (it's the same thing, still beside you). Mirrored for right.
+const DODGE_SHIFT = 0.1;
+const DODGE_EXIT_X = 0.1;
+const DODGE_IGNORE_MS = 4000;
+// The server only looks for obstacles across this part of the width (LANE_X in pipeline.py), so a box
+// this close to one of its ends was leaving out that side.
+const LANE_LEFT = 0.2;
+const LANE_RIGHT = 0.8;
+const LANE_EDGE_SLACK = 0.03;
+// The step phrase repeats this often (Stop still every URGENT_REMIND_MS): once is usually enough.
+const DETOUR_REMIND_MS = 4000;
 // Low obstacles (obstacle.low from /find: a box, a bin, a step, only at foot height). With the phone
 // held up at the target, roughly the last 1.5 m of floor isn't in the picture, so these slide out the
 // bottom of the frame before they ever read "close", and depth reads them too far up close (a box
@@ -516,6 +543,7 @@ export default function App() {
   const exploreUntil = useRef(0); // after a full turn with no sighting: walking a few steps until then
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const detourRef = useRef<Detour | null>(null); // stepping around something in Approach
+  const dodgedRef = useRef<{ side: 'left' | 'right'; until: number } | null>(null); // just passed something on that side
   const tiltRef = useRef<Tilt | null>(null); // the target sits low or high in the picture: which way to tilt
   const wentOff = useRef<{ dir: Tilt; at: number } | null>(null); // it was last seen there, and when
   // The voice is on tilting right now; the left/right drift phrase waits for it.
@@ -1162,6 +1190,7 @@ export default function App() {
     exploreUntil.current = 0;
     saidStandStill.current = false;
     detourRef.current = null;
+    dodgedRef.current = null;
     aheadWarned.current = null;
     tiltRef.current = null;
     wentOff.current = null;
@@ -1202,6 +1231,7 @@ export default function App() {
     findPhaseRef.current = 'approach';
     centeredSince.current = null;
     detourRef.current = null;
+    dodgedRef.current = null;
     aheadWarned.current = null;
     lastDriftAt.current = Date.now();
     interruptForStop({ key: 'handoff', text: HANDOFF_PHRASE, stop: true });
@@ -1224,6 +1254,7 @@ export default function App() {
     findBlanks.current = 0;
     saidStandStill.current = false;
     detourRef.current = null;
+    dodgedRef.current = null;
     aheadWarned.current = null;
     tiltRef.current = null;
     wentOff.current = null;
@@ -1954,14 +1985,19 @@ export default function App() {
     // it, the same check here against the tracked distance (the server's depth, so the same scale).
     const trackedAt = !serverFound && data.found ? data.distance_m : null;
     const pastTarget = (d: number | null) => trackedAt !== null && d !== null && d >= trackedAt - FIND_SELF_M;
-    const o = pastTarget(data.obstacle.distance_m)
-      ? { ...data.obstacle, clear: true, distance_m: null, direction: null, open: null }
+    // Just stepped past something: while it's still beside you (wholly on that half), it isn't new.
+    const dodged = dodgedRef.current && Date.now() < dodgedRef.current.until ? dodgedRef.current.side : null;
+    const besideDodged = (box: [number, number, number, number] | null | undefined) =>
+      !!box && (dodged === 'right' ? box[0] >= 0.5 : dodged === 'left' ? box[0] + box[2] <= 0.5 : false);
+    const o = pastTarget(data.obstacle.distance_m) || besideDodged(data.obstacle.box)
+      ? { ...data.obstacle, clear: true, distance_m: null, direction: null, open: null, box: null }
       : data.obstacle;
     // A low obstacle near enough to act on (see LOW_DETOUR_M), unless it's the target itself.
     const low =
       o.low &&
       (o.low.edge || o.low.distance_m <= LOW_DETOUR_M * WARNING_SCALE[guideSettings().warning ?? 'normal']) &&
       !pastTarget(o.low.distance_m) &&
+      !besideDodged(o.low.box) &&
       !(!serverFound && data.box && insideFraction(o.low.box, data.box) >= LOW_IN_TARGET)
         ? o.low
         : null;
@@ -2010,6 +2046,36 @@ export default function App() {
     const now = Date.now();
     const detour = detourRef.current;
     if (phase === 'approach' && low && detour) detour.lowSeenAt = now;
+    // Passed it (see DODGE_SHIFT): say to turn back toward the target, once, and move on.
+    const passed = (d: Detour & { side: 'left' | 'right' }) => {
+      detourRef.current = null;
+      dodgedRef.current = { side: d.side === 'left' ? 'right' : 'left', until: now + DODGE_IGNORE_MS };
+      situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(d.side), stop: false };
+      lastDriftAt.current = now; // let "Clear" finish before the drift sentence takes over
+      setFindInfo(data);
+    };
+    const dangerBox = lowDanger ? lowDanger.box : (o.box ?? null);
+    const dangerX = dangerBox ? dangerBox[0] + dangerBox[2] / 2 : null;
+    if (danger && detour?.side && dangerBox && dangerX !== null) {
+      detour.startX ??= dangerX;
+      detour.startHeading ??= headingAtCapture;
+      detour.lastBox = dangerBox;
+      // Turning the phone left also slides things right; take that part out (the picture is about
+      // 2 * CAMERA_HALF_FOV_DEG wide), so only the step counts.
+      const turned =
+        detour.startHeading !== null && headingAtCapture !== null
+          ? wrapDeg(detour.startHeading - headingAtCapture) / (2 * CAMERA_HALF_FOV_DEG)
+          : 0;
+      const shift = dangerX - detour.startX - turned; // right is positive
+      const slid =
+        detour.side === 'left'
+          ? dangerBox[0] >= 0.5 && shift >= DODGE_SHIFT
+          : dangerBox[0] + dangerBox[2] <= 0.5 && -shift >= DODGE_SHIFT;
+      if (slid && !danger.stop) {
+        passed({ ...detour, side: detour.side });
+        return;
+      }
+    }
     if (danger) {
       const obstacleSide: Side = lowDanger ? lowDanger.direction : (o.direction ?? 'ahead');
       // Only say which way to step when the server confirmed that side is open (nothing within the
@@ -2026,24 +2092,32 @@ export default function App() {
           : { ...danger, key: `detour:hold:${danger.key}` };
       if (!detour || (detour.side === null && open)) {
         // New detour, or a held one that now has a confirmed open side to step to.
+        const next = say(open);
         detourRef.current = {
           side: open,
           startedAt: detour?.startedAt ?? now,
           clearFrames: 0,
           lowSeenAt: low ? now : (detour?.lowSeenAt ?? 0),
+          startX: dangerX,
+          startHeading: headingAtCapture,
+          lastBox: dangerBox,
+          said: next,
         };
-        const next = say(open);
         if (danger.stop) interruptForStop(next);
         situation.current = next;
         buzz(Haptics.ImpactFeedbackStyle.Heavy);
       } else {
         detour.clearFrames = 0;
+        if (dangerBox) detour.lastBox = dangerBox;
         if (now - detour.startedAt > DETOUR_STUCK_MS) {
           // Stepping didn't help (or they didn't step): back up and try again from scratch.
           detour.startedAt = now;
           situation.current = { key: `detour:stuck:${now}`, text: DETOUR_STUCK_PHRASE, stop: false };
         } else {
-          const next = say(detour.side);
+          // Same words as before unless it became a Stop: "Something low ahead" turning into "...on
+          // your right" as they step is progress, and new words would be said again at once.
+          const next = detour.said && detour.said.stop === danger.stop ? detour.said : say(detour.side);
+          detour.said = next;
           if (danger.stop && !situation.current?.stop) interruptForStop(next);
           situation.current = next;
         }
@@ -2052,6 +2126,18 @@ export default function App() {
       return;
     }
     if (detour) {
+      // Gone out the side it was sliding toward (last seen past the middle and touching that edge of
+      // the lane), not under the bottom: passed, no need to wait.
+      const b = detour.lastBox;
+      const outSide =
+        b !== null &&
+        (detour.side === 'left'
+          ? b[0] + b[2] / 2 >= 0.5 + DODGE_EXIT_X && b[0] + b[2] >= LANE_RIGHT - LANE_EDGE_SLACK
+          : b[0] + b[2] / 2 <= 0.5 - DODGE_EXIT_X && b[0] <= LANE_LEFT + LANE_EDGE_SLACK);
+      if (detour.side && outSide) {
+        passed({ ...detour, side: detour.side });
+        return;
+      }
       detour.clearFrames += 1;
       // A low obstacle that dropped out of the bottom of the picture still counts for LOW_PASS_MS.
       if (detour.clearFrames >= DETOUR_CLEAR_FRAMES && now - detour.lowSeenAt >= LOW_PASS_MS) {
@@ -2306,7 +2392,9 @@ export default function App() {
       const changed = s.text !== lastText;
       const remindAfter = findOnRef.current
         ? isUrgent(s)
-          ? URGENT_REMIND_MS
+          ? s.key.startsWith('detour:') && !s.stop
+            ? DETOUR_REMIND_MS
+            : URGENT_REMIND_MS
           : findPhaseRef.current === 'approach'
           ? APPROACH_REMIND_MS
           : FIND_REMIND_MS

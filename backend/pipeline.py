@@ -267,12 +267,17 @@ def sonar(image: Image.Image, mode: str, warning: str = "normal") -> dict:
     return _sonar_result(depth_map(image, mode), warn_distance(mode, warning))
 
 
-def _sonar_result(depth: np.ndarray, warn_m: float, mask: np.ndarray | None = None) -> dict:
+def _sonar_result(depth: np.ndarray, warn_m: float, mask: np.ndarray | None = None, with_box: bool = False) -> dict:
+    """The /sonar fields; with_box adds `box` (Find uses it to tell when a detour has passed the obstacle)."""
     hit = find_obstacle(depth, warn_m, mask)
     if hit is None:
-        return {"clear": True, "distance_m": None, "direction": None, "open": None}
-    # Finer than half meters so the guide's thresholds change smoothly as you walk.
-    return {"clear": False, "distance_m": round(hit["distance"], 1), "direction": hit["direction"], "open": hit["open"]}
+        result = {"clear": True, "distance_m": None, "direction": None, "open": None}
+    else:
+        # Finer than half meters so the guide's thresholds change smoothly as you walk.
+        result = {"clear": False, "distance_m": round(hit["distance"], 1), "direction": hit["direction"], "open": hit["open"]}
+    if with_box:
+        result["box"] = hit["box"] if hit else None
+    return result
 
 
 # Find mode. Spoken name -> DETR label. Only things DETR reliably detects; its label list also has
@@ -600,7 +605,7 @@ def find(
         # detour ("something close on your left") just before arriving. A box on the floor in front of
         # it still counts. Both distances come from this depth map, so its overreading up close cancels.
         mask &= depth < target_distance - FIND_SELF_M
-    obstacle = _sonar_result(depth, warn_m, mask)
+    obstacle = _sonar_result(depth, warn_m, mask, with_box=True)
     obstacle["low"] = low_obstacle(depth, mask, warn_m)
     result["obstacle"] = obstacle
     return result

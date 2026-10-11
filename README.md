@@ -99,7 +99,7 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `centered` | boolean | within 5° of center: you're facing it |
 | `box` | list of 4 numbers or null | the target's outline, x, y, width, height in 0 to 1 of the image |
 | `sentence` | string | what to say, e.g. "Chair, slightly right, about 3 meters." or "No chair yet. Turn slowly." |
-| `obstacle` | object | the same fields as `/sonar` (the target itself left out); a "Stop" from it wins over Find. Plus `low`: the nearest foot-height-only thing in the lane (`distance_m`, `direction`, `box`, `edge`, `open`) or null. `edge` is true when it reaches the bottom of the frame, about to slip out of view |
+| `obstacle` | object | the same fields as `/sonar` (the target itself left out) plus `box`, the obstacle's outline; a "Stop" from it wins over Find. Plus `low`: the nearest foot-height-only thing in the lane (`distance_m`, `direction`, `box`, `edge`, `open`) or null. `edge` is true when it reaches the bottom of the frame, about to slip out of view |
 
 ### POST /transcribe
 

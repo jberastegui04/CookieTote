@@ -28,6 +28,7 @@ export type FindResult = {
     // nearest obstacle. edge: it reaches the bottom of the frame, so it's about to slip out of view.
     // Older servers don't send it.
     low?: LowObstacle | null;
+    box?: [number, number, number, number] | null; // the nearest obstacle's outline
   };
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
   locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
