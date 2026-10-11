@@ -189,9 +189,17 @@ FRAMING_PHRASES = {
     "Straight ahead.",  # the moment a turn lines the user up with the target (LINED_UP_PHRASE)
     "It's below the camera. Tilt the phone down.", "It's above the camera. Tilt the phone up.",
 }
+# Find's straight-line check toward the target (pipeline.path_check). Mirrors pathPhrase() in app/App.tsx.
+PATH_PHRASES = {"Path to it looks open."}
+for amount in [f"{m} {'meter' if m == 1 else 'meters'}" for m in range(1, 6)] + [
+    f"{ft} {'foot' if ft == 1 else 'feet'}" for ft in range(1, 21)
+]:
+    PATH_PHRASES.add(f"Something in the way, about {amount}.")
+    for side in ("left", "right"):
+        PATH_PHRASES.add(f"Something in the way, about {amount}. Go around it on the {side}.")
 GUIDE_PHRASES = (
     guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES | DETOUR_PHRASES | STATUS_PHRASES
-    | WALKER_PHRASES | FRAMING_PHRASES | REACH_PHRASES
+    | WALKER_PHRASES | FRAMING_PHRASES | REACH_PHRASES | PATH_PHRASES
 )
 
 

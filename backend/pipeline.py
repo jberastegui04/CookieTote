@@ -3,6 +3,7 @@
 Both functions take a PIL image and a mode ("indoor" or "outdoor") and return a dict.
 main.py adds audio_b64 to the describe() result, so don't add it here.
 """
+import math
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -625,7 +626,59 @@ def find(
     obstacle = _sonar_result(depth, warn_m, mask, with_box=True)
     obstacle["low"] = low_obstacle(depth, mask, warn_m)
     result["obstacle"] = obstacle
+    found = result["found"] and target_distance is not None
+    result["path"] = path_check(depth, mask, result["box"], warn_m) if found else None
     return result
+
+
+def path_check(depth: np.ndarray, mask: np.ndarray, box: list[float], max_m: float) -> dict:
+    """Is the straight line to the target open? Looks along a corridor PATH_HALF_WIDTH_M either side of
+    the line from the camera to the target's center, in meters (so it narrows on screen with distance),
+    out to the target (`mask` already leaves out the target and everything beyond it) but no further
+    than max_m, Find's obstacle distance: past that, distant floor (a shiny atrium floor read 5.8 m)
+    looks like obstacles. Covers what the camera sees; the last meter or so of floor in front of your
+    feet isn't in the picture.
+
+    Returns clear, distance_m (nearest thing in the corridor), side (where it sits in the corridor:
+    left / ahead / right), and pass ("left" / "right" / null): a side of the corridor with nothing in a
+    PATH_ROOM_M strip beside it, out to just past the obstacle, and that strip in view. Null when no
+    side is confirmed, the same rule as the detours: never suggest stepping where nobody looked.
+    """
+    h, w = depth.shape
+    cx = box[0] + box[2] / 2
+    span = 2 * math.tan(math.radians(CAMERA_HALF_FOV_DEG))  # frame width per meter of depth
+    lateral = ((np.arange(w) + 0.5) / w - cx)[None, :] * span * depth  # meters from the line, right positive
+    rows = (np.arange(h) / h)[:, None]
+    # Same heights as the lane: skip the ceiling strip, and head height only up close.
+    usable = mask & (rows >= BANDS["head"][0]) & ((rows >= BANDS["head"][1]) | (depth <= HEAD_WARN_M))
+    inside = usable & (np.abs(lateral) <= PATH_HALF_WIDTH_M) & (depth <= max_m)
+    enough = PATH_MIN_FRACTION * h * w
+    if inside.sum() < enough:
+        return {"clear": True, "distance_m": None, "side": None, "pass": None}
+    d = float(np.percentile(depth[inside], PERCENTILE))
+    middle = float(np.mean(lateral[inside & (depth <= d + BOX_MARGIN_M)]))
+    side = "left" if middle < -PATH_HALF_WIDTH_M / 3 else "right" if middle > PATH_HALF_WIDTH_M / 3 else "ahead"
+
+    def room(sign: int) -> bool:
+        # The strip must be in the picture at the obstacle's distance, or "nothing there" means nothing.
+        edge = (1 - cx if sign > 0 else cx) * span * d
+        if edge < PATH_HALF_WIDTH_M + PATH_ROOM_M:
+            return False
+        strip = (sign * lateral > PATH_HALF_WIDTH_M) & (sign * lateral <= PATH_HALF_WIDTH_M + PATH_ROOM_M)
+        return (usable & strip & (depth <= d + PATH_ROOM_DEPTH_M)).sum() < enough
+
+    first = -1 if side == "right" else 1  # pass on the side away from it
+    passing = next((("right" if s > 0 else "left") for s in (first, -first) if room(s)), None)
+    return {"clear": False, "distance_m": round(d, 1), "side": side, "pass": passing}
+
+
+# Find's straight-line check (path_check). Half a person's width plus a margin either side of the line.
+PATH_HALF_WIDTH_M = 0.4
+# Fewer obstacle pixels than this fraction of the picture in the corridor is noise.
+PATH_MIN_FRACTION = 0.002
+# Room to go around: a strip this wide beside the corridor, out to this far past the obstacle.
+PATH_ROOM_M = 0.6
+PATH_ROOM_DEPTH_M = 1.0
 
 
 def low_obstacle(depth: np.ndarray, mask: np.ndarray, warn_m: float) -> dict | None:

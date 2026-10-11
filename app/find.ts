@@ -30,8 +30,19 @@ export type FindResult = {
     low?: LowObstacle | null;
     box?: [number, number, number, number] | null; // the nearest obstacle's outline
   };
+  path?: PathCheck | null; // the straight line to the target, when found (older servers: missing)
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
   locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
+};
+
+// Is the straight line to the target open (pipeline.path_check)? Out to the target or about 3.5 m,
+// whichever is nearer. side: where the nearest thing sits in that corridor. pass: a side with room
+// to go around it, only when the server could see there was room.
+export type PathCheck = {
+  clear: boolean;
+  distance_m: number | null;
+  side: 'left' | 'ahead' | 'right' | null;
+  pass: 'left' | 'right' | null;
 };
 
 export type LowObstacle = {

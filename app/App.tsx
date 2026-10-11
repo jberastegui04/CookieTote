@@ -25,7 +25,7 @@ import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Settings from './Settings';
 import FindPicker from './FindPicker';
-import { loadFindTargets, type LowObstacle } from './find';
+import { loadFindTargets, type LowObstacle, type PathCheck } from './find';
 import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
@@ -81,6 +81,7 @@ type FindResult = {
   candidates?: Candidate[]; // every candidate this frame, best first; the tracker follows one
   // low: foot-height only (find.ts). box: the nearest obstacle's outline, like LowObstacle's.
   obstacle: SonarResult & { low?: LowObstacle | null; box?: [number, number, number, number] | null };
+  path?: PathCheck | null; // the straight line to the target (find.ts)
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
   locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
 };
@@ -262,6 +263,22 @@ const LANE_RIGHT = 0.8;
 const LANE_EDGE_SLACK = 0.03;
 // The step phrase repeats this often (Stop still every URGENT_REMIND_MS): once is usually enough.
 const DETOUR_REMIND_MS = 4000;
+// Straight-line check (`path` from /find): lined up with the target in Approach, is the corridor to it
+// open? Said once after the hand-off, again after a detour ends, and otherwise only when the answer
+// flips (open <-> something in the way) for PATH_CHANGE_FRAMES answers in a row. It replaces Find's
+// old "Something ahead, about 3 meters" warning, which looked at a fixed strip of the screen instead
+// of the way to the target. Phrases are PATH_PHRASES in backend/main.py; change both together.
+const PATH_CHANGE_FRAMES = 2;
+const PATH_OPEN_PHRASE = 'Path to it looks open.';
+function pathPhrase(p: PathCheck, units: Units): string {
+  if (p.clear || p.distance_m === null) return PATH_OPEN_PHRASE;
+  const n =
+    units === 'feet'
+      ? Math.max(1, Math.min(20, Math.round(p.distance_m * FEET_PER_METER)))
+      : Math.max(1, Math.min(5, Math.round(p.distance_m)));
+  const unit = units === 'feet' ? (n === 1 ? 'foot' : 'feet') : n === 1 ? 'meter' : 'meters';
+  return `Something in the way, about ${n} ${unit}.${p.pass ? ` Go around it on the ${p.pass}.` : ''}`;
+}
 // Low obstacles (obstacle.low from /find: a box, a bin, a step, only at foot height). With the phone
 // held up at the target, roughly the last 1.5 m of floor isn't in the picture, so these slide out the
 // bottom of the frame before they ever read "close", and depth reads them too far up close (a box
@@ -621,6 +638,16 @@ export default function App() {
   // Last "Something ahead, about 3 meters" in Find; spokenAt is null until voiceLoop has said it.
   const aheadWarned = useRef<{ key: string; spokenAt: number | null } | null>(null);
   // While this is true nothing else (target guidance, drift) may take the situation from it.
+  // Straight-line check (see PATH_CHANGE_FRAMES): what was last said, whether it's due regardless
+  // (after the hand-off or a detour), answers in a row that disagree with it, and whether this
+  // approach has had a path answer at all (then the old far-ahead warning stays quiet).
+  const pathRef = useRef({ said: null as 'open' | 'blocked' | null, due: false, streak: 0, seen: false });
+  // The path phrase just set; held like the far-ahead warning so target guidance can't replace it unsaid.
+  const pathHold = useRef<{ key: string; spokenAt: number | null } | null>(null);
+  const pathHoldLive = (now: number) => {
+    const w = pathHold.current;
+    return !!w && situation.current?.key === w.key && (w.spokenAt === null || now - w.spokenAt < FIND_AHEAD_HOLD_MS);
+  };
   const aheadHoldLive = (now: number) => {
     const w = aheadWarned.current;
     return !!w && situation.current?.key === w.key && (w.spokenAt === null || now - w.spokenAt < FIND_AHEAD_HOLD_MS);
@@ -1268,6 +1295,8 @@ export default function App() {
     detourRef.current = null;
     dodgedRef.current = null;
     aheadWarned.current = null;
+    pathRef.current = { said: null, due: false, streak: 0, seen: false };
+    pathHold.current = null;
     tiltRef.current = null;
     wentOff.current = null;
     offCenter.current = false;
@@ -1314,6 +1343,8 @@ export default function App() {
     detourRef.current = null;
     dodgedRef.current = null;
     aheadWarned.current = null;
+    pathRef.current = { said: null, due: true, streak: 0, seen: false };
+    pathHold.current = null;
     lastDriftAt.current = Date.now();
     interruptForStop({ key: 'handoff', text: HANDOFF_PHRASE, stop: true });
     situation.current = { key: 'handoff', text: HANDOFF_PHRASE, stop: false };
@@ -1337,6 +1368,8 @@ export default function App() {
     detourRef.current = null;
     dodgedRef.current = null;
     aheadWarned.current = null;
+    pathRef.current = { said: null, due: false, streak: 0, seen: false };
+    pathHold.current = null;
     tiltRef.current = null;
     wentOff.current = null;
     situation.current = { key: 'lost', text: LOST_PHRASE, stop: false };
@@ -1825,7 +1858,7 @@ export default function App() {
           await sleep(300);
           continue;
         } else if (
-          off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS && !aheadHoldLive(now) && !framingLive()
+          off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS && !aheadHoldLive(now) && !pathHoldLive(now) && !framingLive()
         ) {
           // Drifted off the target: say where it is now, from the gyro, without waiting for a frame.
           const text = driftSentence(off);
@@ -2165,6 +2198,7 @@ export default function App() {
     // Passed it (see DODGE_SHIFT): say to turn back toward the target, once, and move on.
     const passed = (d: Detour & { side: 'left' | 'right' }) => {
       detourRef.current = null;
+      pathRef.current.due = true; // check the way again once lined back up
       dodgedRef.current = { side: d.side === 'left' ? 'right' : 'left', until: now + DODGE_IGNORE_MS };
       situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(d.side), stop: false };
       lastDriftAt.current = now; // let "Clear" finish before the drift sentence takes over
@@ -2258,6 +2292,7 @@ export default function App() {
       // A low obstacle that dropped out of the bottom of the picture still counts for LOW_PASS_MS.
       if (detour.clearFrames >= DETOUR_CLEAR_FRAMES && now - detour.lowSeenAt >= LOW_PASS_MS) {
         detourRef.current = null;
+        pathRef.current.due = true; // check the way again once lined back up
         if (detour.side) {
           situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(detour.side), stop: false };
           lastDriftAt.current = now; // let "Clear" finish before the drift sentence takes over
@@ -2270,7 +2305,9 @@ export default function App() {
     }
     // Something further out straight ahead ("Something ahead, about 3 meters."): said once per
     // distance step and held long enough to be spoken; then the target guidance carries on.
-    if (reading && reading.key.startsWith('far:ahead')) {
+    // Only until the server sends the straight-line check (PATH_CHANGE_FRAMES), which replaces it.
+    if (phase === 'approach' && serverFound && data.path) pathRef.current.seen = true;
+    if (reading && reading.key.startsWith('far:ahead') && !pathRef.current.seen) {
       const warned = aheadWarned.current;
       if (!warned || warned.key !== reading.key) {
         // spokenAt is filled in by voiceLoop once it has actually been said; until then (and for
@@ -2326,7 +2363,23 @@ export default function App() {
       }
       if (phase === 'approach') {
         const off = targetOffset() ?? data.bearing_deg;
-        if (tiltRef.current) {
+        // The straight-line check, when lined up and it's due or has changed (PATH_CHANGE_FRAMES).
+        const path = serverFound && !tiltRef.current && Math.abs(off) <= FIND_AHEAD_DEG ? (data.path ?? null) : null;
+        const p = pathRef.current;
+        const pathState = path ? (path.clear ? 'open' : 'blocked') : null;
+        if (pathState && pathState === p.said && !p.due) p.streak = 0;
+        else if (pathState) p.streak += 1;
+        if (path && pathState && (p.due || (pathState !== p.said && p.streak >= PATH_CHANGE_FRAMES))) {
+          p.said = pathState;
+          p.due = false;
+          p.streak = 0;
+          const text = pathPhrase(path, guideSettings().units ?? 'meters');
+          pathHold.current = { key: `path:${text}`, spokenAt: null };
+          situation.current = { key: `path:${text}`, text, stop: false };
+          if (pathState === 'blocked') buzz(Haptics.ImpactFeedbackStyle.Medium);
+        } else if (pathHoldLive(Date.now())) {
+          // Still saying it; target guidance waits.
+        } else if (tiltRef.current) {
           // About to leave the picture: fix that first. Left and right is remembered, this isn't.
           situation.current = { key: `tilt:${tiltRef.current}`, text: tiltPhrase(tiltRef.current), stop: false };
         } else if (Math.abs(off) > FIND_AHEAD_DEG) {
@@ -2542,17 +2595,20 @@ export default function App() {
         s.key === 'standstill' ||
         s.key.startsWith('detour:clear') ||
         s.key.startsWith('detour:stuck') ||
+        s.key.startsWith('path:') ||
         (findOnRef.current && s.key.startsWith('far:'));
       const remind = s.key !== OPEN.key && !oneShot && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
         // The same words were the last thing said: that counts as said, so the far-ahead hold can end.
         if (aheadWarned.current?.key === s.key && aheadWarned.current.spokenAt === null) aheadWarned.current.spokenAt = Date.now();
+        if (pathHold.current?.key === s.key && pathHold.current.spokenAt === null) pathHold.current.spokenAt = Date.now();
         await sleep(100);
         continue;
       }
       lastText = s.text;
       lastSpokenAt = Date.now();
       if (aheadWarned.current && aheadWarned.current.key === s.key) aheadWarned.current.spokenAt = Date.now();
+      if (pathHold.current && pathHold.current.key === s.key) pathHold.current.spokenAt = Date.now();
       setGuideText(s.text);
       await speakPhrase(s.text, s.stop);
       lastEndedAt = Date.now();

@@ -100,6 +100,7 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `box` | list of 4 numbers or null | the target's outline, x, y, width, height in 0 to 1 of the image |
 | `sentence` | string | what to say, e.g. "Chair, turn a little right and walk about 3 meters." or "No chair yet. Turn slowly." |
 | `obstacle` | object | the same fields as `/sonar` (the target itself left out) plus `box`, the obstacle's outline; a "Stop" from it wins over Find. Plus `low`: the nearest foot-height-only thing in the lane (`distance_m`, `direction`, `box`, `edge`, `open`) or null. `edge` is true when it reaches the bottom of the frame, about to slip out of view |
+| `path` | object or null | when found: is the straight line to the target open? `clear`, `distance_m` (nearest thing in a corridor 0.4 m either side of the line, out to the target or 3.5 m), `side` (where it sits in the corridor), `pass` ("left" / "right" when that side was seen to have room, else null) |
 
 ### POST /transcribe
 
