@@ -189,6 +189,13 @@ type FindPhase = 'search' | 'approach';
 const HANDOFF_PHRASE = "Got it. Walk toward it. I'll warn you about anything in the way.";
 const LOST_PHRASE = 'Lost it. Stop and turn slowly.';
 const STAND_STILL_PHRASE = 'Stand still while I look.';
+// Nothing in sight after a full turn: suggest a few steps forward (obstacle warnings on while they
+// walk), then search again. Both phrases are on the /say list (ARRIVAL_PHRASES in backend/main.py).
+const FULL_TURN_DEG = 330;
+const EXPLORE_MS = 7000;
+const SPIN_NOISE_DEG = 1; // heading changes under this between checks are hand shake, not turning
+const NOT_IN_SIGHT_PHRASE = 'Not in sight from here. Walk forward a few steps, then stop.';
+const SEARCH_AGAIN_PHRASE = 'Now stop, and turn slowly again.';
 const HANDOFF_CENTERED_MS = 1000; // facing it this long (and seen recently) hands off to Approach
 const HANDOFF_SEEN_WITHIN_MS = 3000;
 const APPROACH_DRIFT_MS = 2000; // how often the drift sentence may repeat
@@ -432,6 +439,9 @@ export default function App() {
   const walkLevel = useRef(0);
   const movingSince = useRef<number | null>(null);
   const saidStandStill = useRef(false);
+  const spinDeg = useRef(0); // degrees turned in Search since the target was last seen
+  const spinFrom = useRef<number | null>(null);
+  const exploreUntil = useRef(0); // after a full turn with no sighting: walking a few steps until then
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const detourRef = useRef<Detour | null>(null); // stepping around something in Approach
   // Last "Something ahead, about 3 meters" in Find; spokenAt is null until voiceLoop has said it.
@@ -1067,6 +1077,9 @@ export default function App() {
     lastDriftAt.current = 0;
     walkLevel.current = 0;
     movingSince.current = null;
+    spinDeg.current = 0;
+    spinFrom.current = null;
+    exploreUntil.current = 0;
     saidStandStill.current = false;
     detourRef.current = null;
     aheadWarned.current = null;
@@ -1111,6 +1124,9 @@ export default function App() {
   // Approach -> Search: not seen for a while and out of view.
   function lost() {
     findPhaseRef.current = 'search';
+    spinDeg.current = 0;
+    spinFrom.current = null;
+    exploreUntil.current = 0;
     targetHeadingRef.current = null;
     trackRef.current = null;
     lastFoundAt.current = 0;
@@ -1597,7 +1613,38 @@ export default function App() {
       const off = targetOffset();
       const now = Date.now();
       if (findPhaseRef.current === 'search') {
-        if (!saidStandStill.current && movingSince.current !== null && now - movingSince.current > WALK_SUSTAIN_MS) {
+        // How far they've turned without a sighting. Seen recently (or no gyro): start counting again.
+        const h = headingRef.current;
+        if (h === null || now - lastFoundAt.current <= HANDOFF_SEEN_WITHIN_MS) {
+          spinDeg.current = 0;
+          spinFrom.current = h;
+          exploreUntil.current = 0; // it showed up: back to normal search
+        } else {
+          const d = spinFrom.current === null ? 0 : Math.abs(wrapDeg(h - spinFrom.current));
+          if (d >= SPIN_NOISE_DEG) {
+            spinDeg.current += d;
+            spinFrom.current = h;
+          } else if (spinFrom.current === null) {
+            spinFrom.current = h;
+          }
+        }
+        if (exploreUntil.current) {
+          if (now > exploreUntil.current) {
+            exploreUntil.current = 0;
+            spinDeg.current = 0;
+            spinFrom.current = h;
+            situation.current = { key: `searchagain:${now}`, text: SEARCH_AGAIN_PHRASE, stop: false };
+          }
+        } else if (spinDeg.current >= FULL_TURN_DEG) {
+          // A full circle and nothing: it isn't visible from here. A few steps, then look again.
+          exploreUntil.current = now + EXPLORE_MS;
+          spinDeg.current = 0;
+          situation.current = { key: `explore:${now}`, text: NOT_IN_SIGHT_PHRASE, stop: false };
+        }
+        if (
+          !exploreUntil.current &&
+          !saidStandStill.current && movingSince.current !== null && now - movingSince.current > WALK_SUSTAIN_MS
+        ) {
           saidStandStill.current = true;
           situation.current = { key: 'standstill', text: STAND_STILL_PHRASE, stop: false };
         }
@@ -1840,6 +1887,22 @@ export default function App() {
     // warnings were noise. Something close (or a stop) starts a detour: step sideways, keep the
     // phone on the target, and turn back once the obstacle reads clear for a couple of answers.
     const o = data.obstacle;
+    // Exception: the few steps after "Not in sight from here". They're walking, so warn about what's
+    // close (no detour: there's no target to turn back to), and don't repeat "Turn slowly".
+    if (phase === 'search' && exploreUntil.current && !data.found) {
+      const r = !o.clear && o.distance_m !== null
+        ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
+        : null;
+      if (r && (r.stop || r.key.startsWith('close'))) {
+        if (r.stop) {
+          interruptForStop(r);
+          buzz(Haptics.ImpactFeedbackStyle.Heavy);
+        }
+        situation.current = r;
+      }
+      setFindInfo(data);
+      return;
+    }
     // Approach only: in Search the phone is swinging round, and a wall 3 m ahead would be
     // announced mid-turn (movingSince trips on the swing, not just on walking).
     const reading =

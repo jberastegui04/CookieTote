@@ -121,6 +121,9 @@ ARRIVAL_PHRASES |= {
     "Got it. Walk toward it. I'll warn you about anything in the way.",
     "Lost it. Stop and turn slowly.",
     "Stand still while I look.",
+    # A full turn with no sighting (App.tsx NOT_IN_SIGHT_PHRASE / SEARCH_AGAIN_PHRASE).
+    "Not in sight from here. Walk forward a few steps, then stop.",
+    "Now stop, and turn slowly again.",
 }
 # Approach detour: something in the way while walking toward the target. Mirrors the DETOUR_*
 # phrases in app/App.tsx. The user keeps the phone pointed at the target and steps sideways.
