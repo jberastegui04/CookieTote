@@ -91,7 +91,7 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `description` | string or null | the description, if one was sent |
 | `match` | string or null | with a description: `yes` (score at least 0.1), `possible` (0.01 to 0.1), or `no`; for an open-vocabulary target: `yes` (OWLv2 score at least 0.4 and not a far-off speck), `possible` (0.2 to 0.4), or `no`; null for a plain known target |
 | `candidates` | list | every candidate this frame (up to 5), best first; each has `box`, `score`, `bearing_deg`, `distance_m`. The first is the one `box` and `sentence` describe. The app's tracker (`app/tracker.ts`) uses them to keep following the same object across answers |
-| `open_vocab` | boolean | true when the target isn't one of the 13 and OWLv2 searched for the words instead |
+| `open_vocab` | boolean | true when the target isn't one of the 79 built-in objects and OWLv2 searched for the words instead |
 | `match_score` | number or null | the best candidate's score against the description, 0 to 1 |
 | `direction` | string or null | `left`, `ahead` (within 8° of center), or `right` |
 | `bearing_deg` | number or null | degrees off center, right is positive, about -26 to 26; drives the centering haptic |
@@ -107,7 +107,7 @@ Spoken Find request to text (ElevenLabs speech-to-text, `scribe_v2`). Form uploa
 
 ### GET /find/targets
 
-`{"targets": ["chair", "bench", …]}`, the list the picker shows: the 13 objects DETR finds fast and reliably. Anything else ("door", "exit sign", "trash can") also works: `/find` sends the words to OWLv2 (open-vocabulary, on the GPU) and answers with "Found it", "Possible match" or "No match yet", never the user's own words. `/transcribe` returns those words as `target` with `open_vocab: true`.
+`{"targets": ["chair", "bench", …]}`, the 79 everyday objects DETR finds fast and reliably (all of COCO except "orange"). Anything else ("door", "exit sign", "trash can") also works: `/find` sends the words to OWLv2 (open-vocabulary, on the GPU) and answers with "Found it", "Possible match" or "No match yet", never the user's own words. `/transcribe` returns those words as `target` with `open_vocab: true`.
 
 ### GET /say?text=…&voice_id=…
 
@@ -228,6 +228,8 @@ Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backen
 | 7pm to 8pm | Fixes, stable demo build, outdoor clip |
 
 **Cut order if behind.** Voice cloning, then outdoor mode, then settings, then onboarding. Never cut describe, sonar, or the main screen.
+
+**Backlog (after the demo).** One LLM call per Find request (not per frame) to map a free description like "my MacBook" or "the thing I drink from" onto the built-in object names, falling back to open-vocabulary words. Per-frame vision models are too slow for the 2 fps loop and give no box or distance.
 
 ## Challenges
 
