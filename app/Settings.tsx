@@ -6,14 +6,11 @@ import { Enter } from './motion';
 import { DotGrid } from './texture';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
-type Mode = 'auto' | 'indoor' | 'outdoor';
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 type Voice = { id: string; name: string; custom?: boolean };
 type Listen = 'idle' | 'listening' | 'working';
 
 type Props = {
-  mode: Mode;
-  onMode: (m: Mode) => void;
   prefs: Prefs;
   onPrefs: (p: Partial<Prefs>) => void;
   voices: Voice[];
@@ -27,9 +24,17 @@ type Props = {
   onNewVoiceShown: () => void;
   cloneStep: CloneStep;
   onClone: () => void;
+  cloneMaxS: number; // how long this recording runs (shorter when started through Walker)
   onReplaySetup: () => void;
   onClose: () => void;
+  // Which page is showing, kept by the app so Walker's spoken menu and the screen stay in step:
+  // saying "voice" opens the voice page, and tapping it moves Walker there too.
+  page: SettingsPage;
+  onPage: (page: SettingsPage) => void;
+  focus: 'distance' | 'sound' | 'help' | null; // the section Walker is reading: scrolled into view
 };
+
+export type SettingsPage = 'main' | 'voice' | 'edit';
 
 const CLONE_LABEL: Record<CloneStep, string> = {
   idle: 'Record a new trusted voice',
@@ -47,7 +52,19 @@ const SAY_NAME_LABEL: Record<Listen, string> = {
 export default function Settings(p: Props) {
   // The voice list opens as its own page, like a row in iPhone Settings, and each trusted voice
   // opens its own page from there (rename, delete).
-  const [page, setPage] = useState<'main' | 'voice' | 'edit'>('main');
+  const page = p.page;
+  const setPage = p.onPage;
+  // Where each main-page section starts, so the one Walker is reading can be scrolled into view.
+  const mainScroll = useRef<ScrollView>(null);
+  const sectionY = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (page !== 'main' || !p.focus) return;
+    const y = sectionY.current[p.focus];
+    if (y !== undefined) mainScroll.current?.scrollTo({ y: Math.max(0, y - SPACE.sm), animated: true });
+  }, [p.focus, page]);
+  const markSection = (key: string) => (e: { nativeEvent: { layout: { y: number } } }) => {
+    sectionY.current[key] = e.nativeEvent.layout.y;
+  };
   const [editId, setEditId] = useState<string | null>(null);
   const [naming, setNaming] = useState(false); // the page was opened for a voice just recorded
 
@@ -159,6 +176,9 @@ export default function Settings(p: Props) {
   }
 
   if (page !== 'main') {
+    // Default voices come with the app; custom ones were recorded here and are the only ones that can
+    // be renamed or deleted (their Edit button).
+    const defaults = p.voices.filter((v) => !v.custom);
     const own = p.voices.filter((v) => v.custom);
     return (
       <Enter key="voice" from={backFromEdit ? 'fade' : 'right'} style={styles.screen} accessibilityViewIsModal>
@@ -170,24 +190,22 @@ export default function Settings(p: Props) {
           backHint="Returns to settings"
         />
         <ScrollView contentContainerStyle={styles.content}>
-          <Section title="VOICES" />
-          <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
-          <Section title="YOUR OWN" />
-          {own.map((v) => (
-            <LinkRow
-              key={v.id}
-              label={v.name}
-              value="Edit"
-              hint="Rename or delete this voice"
-              onPress={() => {
-                setEditId(v.id);
-                setNaming(false);
-                setPage('edit');
-              }}
-            />
-          ))}
+          <Section title="DEFAULT VOICES" />
+          <VoiceList voices={defaults} selected={p.voiceId} onPick={p.onPickVoice} />
+          <Section title="CUSTOM VOICES" />
+          <VoiceList
+            voices={own}
+            selected={p.voiceId}
+            onPick={p.onPickVoice}
+            onEdit={(v) => {
+              setEditId(v.id);
+              setNaming(false);
+              setPage('edit');
+            }}
+            empty={p.voices.length ? 'No custom voices yet.' : ' '}
+          />
           <LinkRow
-            label={p.cloneStep === 'recording' ? `Recording… ${recordedS} of 30 s. Tap to stop` : CLONE_LABEL[p.cloneStep]}
+            label={p.cloneStep === 'recording' ? `Recording… ${recordedS} of ${p.cloneMaxS} s. Tap to stop` : CLONE_LABEL[p.cloneStep]}
             // VoiceOver hears a fixed label, or it would read the row again every second.
             a11yLabel={CLONE_LABEL[p.cloneStep]}
             hint={p.cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined}
@@ -204,20 +222,11 @@ export default function Settings(p: Props) {
     <Enter key="main" from={opened.current ? 'fade' : 'up'} style={styles.screen} accessibilityViewIsModal>
       <DotGrid />
       <Header title="Settings" onBack={p.onClose} backHint="Returns to the camera" />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={mainScroll} contentContainerStyle={styles.content}>
 
-        <Section title="WHERE ARE YOU?" />
-        <Segment
-          value={p.mode}
-          onChange={p.onMode}
-          options={[
-            { value: 'auto', label: 'Auto', hint: 'Works out indoor or outdoor from the camera' },
-            { value: 'indoor', label: 'Indoor', hint: 'Warns at about 2 meters' },
-            { value: 'outdoor', label: 'Outdoor', hint: 'Warns at about 4 meters' },
-          ]}
-        />
-
-        <Section title="DISTANCE" />
+        <View onLayout={markSection('distance')}>
+          <Section title="DISTANCE" />
+        </View>
         <Segment
           value={p.prefs.units}
           onChange={(units) => p.onPrefs({ units })}
@@ -234,11 +243,13 @@ export default function Settings(p: Props) {
           options={[
             { value: 'close', label: 'Close', hint: 'Warns later, when things are nearer' },
             { value: 'normal', label: 'Normal', hint: 'The usual warning distance' },
-            { value: 'early', label: 'Early', hint: 'Warns sooner, so you have more time to stop' },
+            { value: 'early', label: 'Far', hint: 'Warns from farther away, so you have more time to stop' },
           ]}
         />
 
-        <Section title="SOUND & TOUCH" />
+        <View onLayout={markSection('sound')}>
+          <Section title="SOUND & TOUCH" />
+        </View>
         <ToggleRow
           label="Guidance voice"
           hint="When off, the phone's own voice reads warnings instead"
@@ -247,19 +258,21 @@ export default function Settings(p: Props) {
         />
         <ToggleRow
           label="Haptics"
-          hint="Vibrates for warnings and the guide"
+          hint="Vibrates for warnings and while finding"
           value={p.prefs.haptics}
           onChange={(v) => p.onPrefs({ haptics: v })}
         />
         <LinkRow
           label="Walker's voice"
           value={voiceName}
-          hint="Opens the list of voices. Walker, the guide and Find all use the one you pick."
+          hint="Opens the list of voices. Walker and Find use the one you pick."
           onPress={() => setPage('voice')}
         />
         <SpeedSlider value={p.prefs.speed} onChange={(i) => p.onPrefs({ speed: i })} />
 
-        <Section title="HELP" />
+        <View onLayout={markSection('help')}>
+          <Section title="HELP" />
+        </View>
         <LinkRow label="Replay setup" value="Play" hint="Goes through the first-launch setup again" onPress={p.onReplaySetup} />
         <LinkRow
           label="What it can't see"

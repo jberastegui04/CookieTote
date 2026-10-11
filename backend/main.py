@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import time
 from collections import deque
 
@@ -158,6 +159,7 @@ STATUS_PHRASES = {
     "Microphone access is needed to record a voice.", "Could not start recording.",
     "Recording. Speak naturally. Tap again to stop.",
     "Adding the voice, please wait.", "Voice added.", "Could not add the voice. Try again.",
+    "Adding voices is locked on this phone. The app key is missing.",
     # The reasons /voices/clone gives when it refuses (voice.VoiceRejected), which the app says aloud.
     "ElevenLabs flagged this recording. Record a real person in a quiet room.",
     f"You have {voice.MAX_CLONES} trusted voices. Delete one in Settings first.",
@@ -167,18 +169,37 @@ STATUS_PHRASES |= {f"Finding {t}. Turn slowly." for t in pipeline.FIND_TARGETS}
 # findLine in app/walkerCommands.ts.
 WALKER_PHRASES = {
     "Sure thing. Let's find it.", "What should I look for?",
-    "Alright, guide's on. I'll let you know what's in your way.", "Okay, guide's off.",
     "Let me take a look.", "Here it is again.", "Opening settings.", "Okay, stopping everything.",
-    "Got it. Feet it is.", "Got it. Meters it is.", "Got it. I'll give you a heads up early.",
+    "Got it. Feet it is.", "Got it. Meters it is.", "Got it. I'll warn you from farther away.",
     "Got it. Normal warnings.", "Got it. I'll only warn you when things are close.", "Got it. Here's the new voice.",
-    "You can say: find the door. Start walking, or stop. What is in front of me. Repeat that. "
-    "Units feet, or meters. Warn me early, normal, or close. Use, and a voice name. Or settings.",
+    "You can say: find the door. Stop. What is in front of me. Repeat that. Settings. "
+    "Units feet, or meters. Warn me close, normal, or far. Or use, and a voice name.",
     "Sorry, say help for options.", "Yeah? What do you need?", "Sorry, I didn't catch that.",
     "Sorry, I couldn't hear you. Try again.", "I need the microphone to hear you.",
     "Welcome to Cyclops. Tap anywhere to begin.",
-    "You're all set. Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: "
+    "Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: "
     "find the door. You can change my voice in Settings. Ask me for help any time.",
+    # Settings, hands free: mirrors MENU and the "Label: value." lines in app/walkerCommands.ts.
+    "Settings. Say a section: distance, sound and touch, or help. Or say done to go back.",
+    "Closing settings.",
+    "Say close, normal, or far. Or feet, or meters. Or say done to go back.",
+    "Say haptics on or off, guidance voice on or off, faster or slower, or voice to pick a different one. "
+    "Or say done to go back.",
+    "Default voices.", "Custom voices.", "No custom voices yet.",
+    "Say the name you like. Say record to make a new one, or rename to rename a custom voice. Or say done to go back.",
+    "Which custom voice?", "Say the new name.", "Only custom voices can be renamed.",
+    "I'll record someone you trust for fifteen seconds and make a voice from it. Only record someone who has "
+    "agreed. Say yes to start.",
+    "Recording now, for fifteen seconds. Have them speak naturally.",
+    "Okay, I won't record.", "Say a name for this voice.",
+    "It warns about things standing still in your path. It does not replace a cane, and it does not detect curbs, "
+    "drop-offs, moving cars, or street crossings.",
+    "Say replay setup. Or say done to go back.",
 }
+WALKER_PHRASES |= {f"Units: {u}." for u in ("meters", "feet")}
+WALKER_PHRASES |= {f"Warn me: {w}." for w in ("close", "normal", "far")}
+WALKER_PHRASES |= {f"{label}: {state}." for label in ("Guidance voice", "Haptics") for state in ("on", "off")}
+WALKER_PHRASES |= {f"Speech speed: {name}." for name in ("slowest", "slower", "normal", "faster", "fastest")}
 WALKER_PHRASES |= {f"Sure thing. Let's find the {t}." for t in pipeline.FIND_TARGETS}
 # Find's arrival line, with where to reach. Mirrors reachPhrase() in app/App.tsx.
 REACH_PHRASES = {
@@ -206,11 +227,21 @@ GUIDE_PHRASES = (
 )
 
 
+# Walker's settings menu says "Voice: Sarah." Voice names change (trusted voices are added and
+# renamed), so this one is checked against the current list instead of a fixed set.
+YOUR_VOICE = re.compile(r"Voice: (.{1,40})\.")
+
+
+def _names_a_voice(text: str) -> bool:
+    m = YOUR_VOICE.fullmatch(text)
+    return bool(m) and m.group(1) in {v["name"] for v in voice.list_voices()}
+
+
 @app.get("/say")
 async def say(text: str, voice_id: str | None = None):
     """WAV of a guide-mode phrase in the chosen voice. Cached by (voice, text)."""
     text = text.strip()
-    if text not in GUIDE_PHRASES:
+    if text not in GUIDE_PHRASES and not await run_in_threadpool(_names_a_voice, text):
         raise HTTPException(400, "not a guide phrase")
     wav = await run_in_threadpool(voice.speak_wav, text, voice_id)
     if wav is None:

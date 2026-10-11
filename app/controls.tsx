@@ -169,22 +169,26 @@ export function LinkRow(p: { label: string; a11yLabel?: string; hint?: string; v
 }
 
 // A list of voices, not a cycle: tap one to pick it and hear its sample.
+// onEdit (custom voices): each row also gets an Edit button, its own touch target, for rename and
+// delete. empty: what to show when the list is empty.
 export function VoiceList(p: {
   voices: { id: string; name: string }[];
   selected: string | null;
   onPick: (v: { id: string; name: string }) => void;
+  onEdit?: (v: { id: string; name: string }) => void;
+  empty?: string;
 }) {
   if (p.voices.length === 0) {
-    return <Caption>Voices appear once the server is awake. This can take about a minute.</Caption>;
+    return <Caption>{p.empty ?? 'Voices appear once the server is awake. This can take about a minute.'}</Caption>;
   }
   return (
     <View accessibilityRole="radiogroup">
       {p.voices.map((v) => {
         const on = v.id === p.selected;
-        return (
+        const pick = (
           <Pressable
             key={v.id}
-            style={({ pressed }) => [s.row, on && s.rowSelected, pressed && s.pressed]}
+            style={({ pressed }) => [p.onEdit ? s.pickArea : [s.row, on && s.rowSelected], pressed && s.pressed]}
             onPress={() => {
               tapHaptic();
               p.onPick(v);
@@ -197,6 +201,25 @@ export function VoiceList(p: {
             <Text style={s.rowLabel}>{v.name}</Text>
             <View style={[s.radio, on && s.radioOn]}>{on ? <View style={s.radioDot} /> : null}</View>
           </Pressable>
+        );
+        if (!p.onEdit) return pick;
+        const edit = p.onEdit;
+        return (
+          <View key={v.id} style={[s.row, s.rowSplit, on && s.rowSelected]}>
+            {pick}
+            <Pressable
+              style={({ pressed }) => [s.editButton, pressed && s.pressed]}
+              onPress={() => {
+                tapHaptic();
+                edit(v);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${v.name}`}
+              accessibilityHint="Rename or delete this voice"
+            >
+              <Text style={s.editText}>Edit</Text>
+            </Pressable>
+          </View>
         );
       })}
     </View>
@@ -305,6 +328,17 @@ const s = StyleSheet.create({
   // borderTopColor too: the rows' lighter top edge would otherwise stay gray above the yellow.
   rowActive: { borderColor: C.accent, borderTopColor: C.accent, borderWidth: 3 },
   rowSelected: { borderColor: C.accent, borderTopColor: C.accent, borderWidth: 3, backgroundColor: C.tint },
+  // A custom voice's row: picking on the left, Edit on the right, split by a thin line.
+  rowSplit: { paddingHorizontal: 0, paddingLeft: 20 },
+  pickArea: { flex: 1, minHeight: 68, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 16 },
+  editButton: {
+    minHeight: 68,
+    paddingHorizontal: 18,
+    justifyContent: 'center',
+    borderLeftWidth: 1.5,
+    borderLeftColor: C.border,
+  },
+  editText: { color: C.accent, fontSize: 20, ...font('bold') },
   pressed: { transform: [{ scale: 0.97 }], opacity: 0.9 },
   band: {
     backgroundColor: C.card,

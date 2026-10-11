@@ -23,7 +23,7 @@ import * as Haptics from 'expo-haptics';
 import { DeviceMotion } from 'expo-sensors';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Settings from './Settings';
+import Settings, { type SettingsPage } from './Settings';
 import FindPicker from './FindPicker';
 import { loadFindTargets, type LowObstacle, type PathCheck } from './find';
 import FindScreen from './FindScreen';
@@ -31,7 +31,23 @@ import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
 import { ViewfinderCorners } from './texture';
 import { WalkerBubble, WalkerButton, type WalkerState } from './Walker';
-import { findLine, LINES, parseCommand } from './walkerCommands';
+import {
+  findLine,
+  LINES,
+  cleanName,
+  isYes,
+  MENU,
+  onOffLine,
+  parseCommand,
+  sectionFromSpeech,
+  settingFromSpeech,
+  speedLine,
+  unitsLine,
+  voiceLine,
+  warnLine,
+  type Section,
+  type SettingChange,
+} from './walkerCommands';
 import { trackUpdate, trackView, type Candidate, type Track } from './tracker';
 import Setup from './Setup';
 import { DEFAULT_PREFS, formatDistance, SPEEDS, type Prefs } from './prefs';
@@ -39,10 +55,6 @@ import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // Your laptop's address on the same Wi-Fi, set in app/.env (see README).
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
-
-// The Where are you setting. 'auto' lets the server guess from the photo; it says what it used in `scene`.
-type Mode = 'auto' | 'indoor' | 'outdoor';
-type Scene = 'indoor' | 'outdoor';
 
 // Matches POST /describe in the README. Keep in sync with backend/main.py.
 type DescribeResult = {
@@ -100,10 +112,13 @@ type Voice = { id: string; name: string; custom?: boolean }; // custom: a truste
 // Voice cloning: tap to hear the consent notice, tap again to record, tap again to stop and upload.
 type CloneStep = 'idle' | 'confirm' | 'recording' | 'uploading';
 const CLONE_MAX_MS = 30000;
+// Recording a voice through Walker (no hands): there's no tapping to stop, so it's shorter, and stops by itself.
+const CLONE_HANDS_FREE_MS = 15000;
+// Said when the server refuses a voice change for lack of the app key (on the /say list).
+const NEEDS_APP_KEY = 'Adding voices is locked on this phone. The app key is missing.';
 // Said (without VoiceOver) just before a voice recording starts. On the /say list in backend/main.py.
 const CLONE_RECORDING_CUE = 'Recording. Speak naturally. Tap again to stop.';
 const VOICE_KEY = 'voice_id';
-const MODE_KEY = 'mode';
 const SETUP_KEY = 'setup_done';
 // For the demo, setup opens on every launch (last choices already selected). Set to false so it only shows once.
 const ALWAYS_SHOW_SETUP = true;
@@ -582,8 +597,6 @@ export default function App() {
   const [fastPictureSize, setFastPictureSize] = useState<string | undefined>(undefined);
   const player = useAudioPlayer(null);
   const lastClip = useRef<File | null>(null);
-  const [mode, setMode] = useState<Mode>('auto');
-  const [scene, setScene] = useState<Scene | null>(null); // from the newest response
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<DescribeResult | null>(null);
   // Voice picker. The list comes from GET /voices; the choice is remembered on the phone.
@@ -601,6 +614,7 @@ export default function App() {
   const voiceIdRef = useRef<string | null>(WALKER_VOICE_ID);
   const screenReader = useRef(false);
   const [cloneStep, setCloneStep] = useState<CloneStep>('idle');
+  const [cloneMaxS, setCloneMaxS] = useState(CLONE_MAX_MS / 1000); // shown on the Record row while recording
   const cloneStepRef = useRef<CloneStep>('idle');
   const cloneTimer = useRef<ReturnType<typeof setTimeout> | null>(null); // the current step's timeout
   const cloneStarting = useRef(false); // between the second tap and the recorder actually running
@@ -615,7 +629,6 @@ export default function App() {
   const [guideSide, setGuideSide] = useState<Side | null>(null);
   const [guideText, setGuideText] = useState('');
   const guideOnRef = useRef(false);
-  const modeRef = useRef<Mode>('auto');
   const cameraBusy = useRef(false); // one photo at a time, shared by describe and guide
   const quietUntil = useRef(0); // guide stays quiet while a describe sentence is being spoken
   const situation = useRef<Situation | null>(null); // newest reading, sorted; null until the first one
@@ -702,6 +715,14 @@ export default function App() {
   const walkerVoice = useRef<string | undefined>(undefined); // identifier of his built-in fallback voice
   const walkerPlaying = useRef(false); // his ElevenLabs clip is on the player
   const walkerCancel = useRef(false); // stopWalker: cut him off now
+  const voicesRef = useRef<Voice[]>([]); // the voice list, for the settings menu's async loop
+  // Settings' page and the section Walker is reading, kept here so the spoken menu and the screen
+  // move together both ways (see onSettingsPage).
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('main');
+  const settingsPageRef = useRef<SettingsPage>('main');
+  const [settingsFocus, setSettingsFocus] = useState<Section | null>(null);
+  const menuActive = useRef(false); // Walker's spoken settings menu is running
+  const menuJump = useRef<'voices' | 'sound' | null>(null); // a tap moved the screen; the menu follows
   // Each start of Find, the voice loop, or the pulse loop bumps its counter, and an older copy still
   // running sees that and quits. So starting Find again while finding (Walker: "find the door") never
   // leaves two loops talking at once.
@@ -717,6 +738,8 @@ export default function App() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   // null until the saved answer loads, so the camera doesn't flash before setup.
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
+  // Just tapped through the welcome: the poster is drawn over the camera, fading out (a crossfade).
+  const [welcomeLeaving, setWelcomeLeaving] = useState(false);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const prefsRef = useRef<Prefs>(DEFAULT_PREFS);
   const settingsOpen = useRef(false);
@@ -770,18 +793,14 @@ export default function App() {
       })
       .catch(() => {});
     const sub = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => (screenReader.current = on));
-    AsyncStorage.multiGet([MODE_KEY, SETUP_KEY, PREFS_KEY])
-      .then(([[, savedMode], [, savedSetup], [, savedPrefs]]) => {
+    AsyncStorage.multiGet([SETUP_KEY, PREFS_KEY])
+      .then(([[, savedSetup], [, savedPrefs]]) => {
         setSetupDone(!ALWAYS_SHOW_SETUP && savedSetup === '1');
         if (savedPrefs) {
           const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs) };
           prefsRef.current = loaded;
           setPrefs(loaded);
           setTapHaptics(loaded.haptics);
-        }
-        if (savedMode === 'auto' || savedMode === 'indoor' || savedMode === 'outdoor') {
-          modeRef.current = savedMode;
-          setMode(savedMode);
         }
       })
       .catch(() => setSetupDone(false));
@@ -809,6 +828,10 @@ export default function App() {
       sub.remove();
     };
   }, []);
+
+  useEffect(() => {
+    voicesRef.current = voices;
+  }, [voices]);
 
   // If the font fails to load, carry on with the system font rather than a blank screen.
   if (setupDone === null || (!fontsLoaded && !fontError)) return <View style={[styles.screen, styles.blank]} />;
@@ -850,7 +873,28 @@ export default function App() {
 
 
   // Opening Settings silences the app and pauses the guide; closing it turns the guide back on.
+  function showSettingsPage(page: SettingsPage) {
+    settingsPageRef.current = page;
+    setSettingsPage(page);
+  }
+
+  // A tap moved Settings to another page. If Walker's menu is running, he follows: the voice page
+  // makes him read the voices; back from it, he returns to Sound and touch. He drops whatever he was
+  // saying or listening for, so the next thing heard is about the new page.
+  function onSettingsPage(page: SettingsPage) {
+    const prev = settingsPageRef.current;
+    showSettingsPage(page);
+    if (!menuActive.current) return;
+    const jump = page === 'voice' && prev !== 'voice' ? 'voices' : page === 'main' && prev === 'voice' ? 'sound' : null;
+    if (!jump) return;
+    menuJump.current = jump;
+    stopWalker();
+    if (walkerStateRef.current === 'listening') walkerDone.current = true;
+  }
+
   function openSettings() {
+    showSettingsPage('main');
+    setSettingsFocus(null);
     loadVoices().catch(() => {}); // the team shares the voices; another phone may have changed them
     tapHaptic();
     settingsOpen.current = true;
@@ -863,6 +907,7 @@ export default function App() {
 
   function closeSettings() {
     settingsOpen.current = false;
+    if (walkerStateRef.current === 'listening') walkerDone.current = true; // ends the settings menu
     setShowSettings(false);
     if (guideWasOn.current && !guideOnRef.current) toggleGuide();
     guideWasOn.current = false;
@@ -896,21 +941,9 @@ export default function App() {
   // The Settings every request carries (see the README's settings table). distance_m always comes back
   // in meters; units only changes the spoken sentences.
   function appendSettings(form: FormData) {
-    form.append('mode', modeRef.current);
+    form.append('mode', 'indoor'); // indoor only: the indoor depth model and warning distance
     form.append('warning', prefsRef.current.warning);
     form.append('units', prefsRef.current.units);
-  }
-
-  // Every response says which scene it used; with Auto, that's what the top chip shows.
-  function noteScene(data: unknown) {
-    const sc = (data as { scene?: unknown }).scene;
-    if (sc === 'indoor' || sc === 'outdoor') setScene(sc);
-  }
-
-  function changeMode(next: Mode) {
-    modeRef.current = next;
-    setMode(next);
-    AsyncStorage.setItem(MODE_KEY, next).catch(() => {});
   }
 
   // The welcome poster is up: after a moment (so VoiceOver can read the screen first), Walker says to
@@ -924,6 +957,7 @@ export default function App() {
   function finishSetup() {
     AsyncStorage.setItem(SETUP_KEY, '1').catch(() => {});
     setSetupDone(true);
+    if (permission?.granted) setWelcomeLeaving(true); // no crossfade into the camera-permission screen
     // Walker explains the basics once the camera is up.
     stopWalker();
     setTimeout(() => walkerReply(LINES.introHowTo), 700);
@@ -1124,7 +1158,9 @@ export default function App() {
   }
 
   // One button, three taps: consent notice, start recording, stop and upload.
-  async function cloneTap() {
+  // handsFree: Walker started it by voice. He has already said that recording is starting, so no
+  // "tap again to stop" cue, and it stops by itself after CLONE_HANDS_FREE_MS.
+  async function cloneTap(handsFree = false) {
     const step = cloneStepRef.current;
     if (step === 'uploading') return;
     if (step === 'idle') {
@@ -1157,7 +1193,7 @@ export default function App() {
         if (findOnRef.current) stopFind();
         // Without VoiceOver nothing said that recording had begun. Said before the microphone
         // opens, so the app's voice isn't in the sample. (VoiceOver users get the announcement below.)
-        if (!screenReader.current) await speakPhrase(CLONE_RECORDING_CUE, true);
+        if (!screenReader.current && !handsFree) await speakPhrase(CLONE_RECORDING_CUE, true);
         try {
           // iOS only records when the audio session allows it; turned back off after the recording.
           await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -1174,7 +1210,8 @@ export default function App() {
         AccessibilityInfo.announceForAccessibility('Recording. Speak naturally. Double tap to stop.');
         cloneTimer.current = setTimeout(() => {
           if (cloneStepRef.current === 'recording') cloneTap();
-        }, CLONE_MAX_MS);
+        }, handsFree ? CLONE_HANDS_FREE_MS : CLONE_MAX_MS);
+        setCloneMaxS((handsFree ? CLONE_HANDS_FREE_MS : CLONE_MAX_MS) / 1000);
       } finally {
         cloneStarting.current = false;
       }
@@ -1196,6 +1233,8 @@ export default function App() {
         const { detail } = await res.json();
         throw new Error(String(detail), { cause: 'spoken' });
       }
+      // 401/403: the server wants the app key (EXPO_PUBLIC_APP_KEY in app/.env) and didn't get it.
+      if (res.status === 401 || res.status === 403) throw new Error(NEEDS_APP_KEY, { cause: 'spoken' });
       if (!res.ok) throw new Error(`Server ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const added: Voice = await res.json();
       // Listed even if ElevenLabs' own list hasn't caught up yet; otherwise the naming page never opens.
@@ -1661,8 +1700,264 @@ export default function App() {
 
   // Walker's most likely first lines, in his voice, so his first answer isn't late.
   async function prefetchWalker() {
-    for (const text of [LINES.welcome, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.guideOn, LINES.guideOff, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
+    for (const text of [LINES.welcome, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
       await fetchPhrase(text);
+    }
+  }
+
+  // Settings, hands free (say "settings"): Walker lists the sections, reads the one you pick with its
+  // current values ("Haptics: on."), then listens for changes ("feet", "haptics off", "faster").
+  // "Voice" opens the voice menu: every voice plays, then pick one by name or record a new one.
+  // "Done" (or "back") goes back one level. Anything else is tried as another section, then as a
+  // normal command ("find the door" closes Settings and does it), so nothing is a dead end.
+  // Ends when Settings closes, or after three silent tries.
+  async function settingsMenu() {
+    const live = () => settingsOpen.current;
+    let level: 'top' | Section | 'voices' = 'top';
+    // Moves the screen with him: the voice page for the voices, otherwise Settings scrolled to the
+    // section he's reading.
+    const setLevel = (next: 'top' | Section | 'voices') => {
+      level = next;
+      showSettingsPage(next === 'voices' ? 'voice' : 'main');
+      setSettingsFocus(next === 'top' || next === 'voices' ? null : next);
+    };
+    // A tap moved the screen (onSettingsPage): go where it went.
+    const followTap = async () => {
+      const jump = menuJump.current;
+      menuJump.current = null;
+      if (jump === 'voices') {
+        await enterVoices();
+        return true;
+      }
+      if (jump === 'sound') {
+        setLevel('sound');
+        lines = readSection('sound');
+        return true;
+      }
+      return false;
+    };
+    let lines: string[] = [MENU.sections];
+    let silent = 0;
+    // Default voices, then custom ones (each plays and says its own name), as on the screen.
+    const enterVoices = async () => {
+      setLevel('voices');
+      const defaults = voicesRef.current.filter((v) => !v.custom);
+      const own = voicesRef.current.filter((v) => v.custom);
+      await walkerReply(MENU.defaultVoices);
+      for (const v of defaults) {
+        if (!live() || menuJump.current) return;
+        await pickSampleAndWait(v.id);
+      }
+      if (!live() || menuJump.current) return;
+      await walkerReply(MENU.customVoices);
+      if (own.length === 0) await walkerReply(MENU.noCustom);
+      for (const v of own) {
+        if (!live() || menuJump.current) return;
+        await pickSampleAndWait(v.id);
+      }
+      lines = [MENU.voiceAsk];
+    };
+    menuActive.current = true;
+    menuJump.current = null;
+    try {
+      while (live() && silent < 3) {
+        if (await followTap()) continue;
+        for (const line of lines) {
+          if (!live() || menuJump.current) break;
+          await walkerReply(line);
+        }
+        if (menuJump.current) continue;
+        const heard = live() ? await walkerHear() : null;
+        if (!live()) return;
+        if (menuJump.current) continue;
+        if (!heard) {
+          silent += 1;
+          lines = [level === 'top' ? MENU.sections : level === 'voices' ? MENU.voiceAsk : askFor(level)];
+          continue;
+        }
+        silent = 0;
+        if (level === 'top') {
+          const picked = sectionFromSpeech(heard.text);
+          if (picked === 'done' || picked === 'back') return closeMenu();
+          if (picked) {
+            setLevel(picked);
+            // The values themselves say what can change ("Haptics: on."), so he just listens; the
+            // options are read out only if nothing is said. Help has no values, so it keeps its prompt.
+            lines = picked === 'help' ? [...readSection(picked), askFor(picked)] : readSection(picked);
+            continue;
+          }
+          if (await otherCommand(heard)) return;
+          lines = [LINES.didntCatch];
+          continue;
+        }
+        const change = settingFromSpeech(heard.text, voicesRef.current);
+        if (change?.kind === 'done' || change?.kind === 'back') {
+          if (level === 'voices') {
+            setLevel('sound');
+            lines = readSection('sound');
+          } else {
+            setLevel('top');
+            lines = [MENU.sections];
+          }
+          continue;
+        }
+        if (change?.kind === 'replay') {
+          replaySetup();
+          return;
+        }
+        if (change?.kind === 'voices' || (change?.kind === 'list' && level === 'voices')) {
+          await enterVoices();
+          continue;
+        }
+        if (change?.kind === 'rename') {
+          setLevel('voices');
+          lines = [await renameHandsFree(change.voice)];
+          continue;
+        }
+        if (change?.kind === 'record') {
+          const name = await recordVoiceHandsFree();
+          setLevel('voices');
+          lines = name ? [voiceLine(name), MENU.voiceAsk] : [MENU.voiceAsk];
+          continue;
+        }
+        if (change && change.kind !== 'list') {
+          lines = [await applyChange(change)]; // "Haptics: off." then listening again
+          continue;
+        }
+        // Not a setting here: another section ("distance"), or a normal command.
+        const other = sectionFromSpeech(heard.text);
+        if (other && other !== 'done' && other !== 'back') {
+          setLevel(other);
+          lines = other === 'help' ? [...readSection(other), askFor(other)] : readSection(other);
+          continue;
+        }
+        if (await otherCommand(heard)) return;
+        lines = [LINES.didntCatch];
+      }
+    } finally {
+      menuActive.current = false;
+    }
+  }
+
+  // A normal Walker command said inside Settings ("find the door", "what's in front of me"): closes
+  // Settings and does it. False if it wasn't one.
+  async function otherCommand(heard: Heard): Promise<boolean> {
+    const cmd = parseCommand(heard.text, voicesRef.current);
+    if (cmd.action === 'none' || cmd.action === 'wake' || cmd.action === 'settings') return false;
+    closeSettings();
+    await walkerRespond(heard);
+    return true;
+  }
+
+  // Plays a voice's sample ("Hi, I'm Sarah…") without choosing it, and waits until it's done.
+  async function pickSampleAndWait(id: string) {
+    await playSample(id);
+    for (let i = 0; i < 20 && !player.playing; i++) await sleep(50);
+    for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
+  }
+
+  // Renames a custom voice by voice: which one (if it wasn't named already), then the new name.
+  // Default voices can't be renamed. Returns what Walker says to confirm.
+  async function renameHandsFree(named: Voice | null): Promise<string> {
+    let target = named;
+    if (!target) {
+      await walkerReply(MENU.renameWhich);
+      const which = await walkerHear();
+      const change = which ? settingFromSpeech(`use ${which.text}`, voicesRef.current) : null;
+      target = change?.kind === 'voice' ? (change.voice as Voice) : null;
+    }
+    if (!target) return LINES.didntCatch;
+    if (!target.custom) return MENU.onlyCustom;
+    await walkerReply(MENU.renameAsk);
+    const said = await walkerHear();
+    const name = said ? cleanName(said.text) : '';
+    if (!name) return LINES.didntCatch;
+    await renameVoice(target.id, name);
+    return voiceLine(name);
+  }
+
+  // Records a trusted voice by voice: consent first ("Say yes to start"), then the usual recording
+  // (its own cue, 30 seconds, stops by itself), and a spoken name. The new voice's name, or null.
+  async function recordVoiceHandsFree(): Promise<string | null> {
+    await walkerReply(MENU.recordConsent);
+    const yes = await walkerHear();
+    if (!yes || !isYes(yes.text)) {
+      await walkerReply(MENU.recordSkipped);
+      return null;
+    }
+    const before = voiceIdRef.current;
+    await walkerReply(MENU.recordStart);
+    setClone('confirm');
+    await cloneTap(true); // records 15 seconds, stops by itself, then adds the voice and plays it
+    for (let i = 0; i < 1200 && cloneStepRef.current !== 'idle'; i++) await sleep(100); // up to 2 minutes
+    const added = voiceIdRef.current;
+    if (!added || added === before) return null; // it failed, and said why
+    await sleep(1500); // the "Voice added." sample starts a moment later
+    for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
+    await walkerReply(MENU.nameAsk);
+    const said = await walkerHear();
+    const name = said ? cleanName(said.text) : '';
+    if (!name) return voicesRef.current.find((v) => v.id === added)?.name ?? null;
+    await renameVoice(added, name);
+    return name;
+  }
+
+  async function closeMenu() {
+    await walkerReply(MENU.closing);
+    closeSettings();
+  }
+
+  // One spoken answer: shows "Listening…", records until a pause, and sends it to /transcribe.
+  async function walkerHear() {
+    setWalkerText(null);
+    setWalker('listening');
+    walkerHolds.current = true;
+    const heard = await walkerListen();
+    walkerHolds.current = false;
+    setWalker('idle');
+    return heard && heard !== 'interrupted' ? heard : null;
+  }
+
+  function askFor(section: Section) {
+    return section === 'distance' ? MENU.distanceAsk : section === 'sound' ? MENU.soundAsk : MENU.helpAsk;
+  }
+
+  // The section's settings with their current values, as Walker reads them.
+  function readSection(section: Section): string[] {
+    const p = prefsRef.current;
+    if (section === 'distance') return [unitsLine(p.units), warnLine(p.warning)];
+    if (section === 'help') return [MENU.helpRead];
+    const name = voicesRef.current.find((v) => v.id === voiceIdRef.current)?.name ?? 'Walker';
+    return [onOffLine('Guidance voice', p.speech), onOffLine('Haptics', p.haptics), voiceLine(name), speedLine(p.speed)];
+  }
+
+  // Makes the change and returns what Walker says to confirm it.
+  async function applyChange(change: SettingChange): Promise<string> {
+    switch (change.kind) {
+      case 'units':
+        updatePrefs({ units: change.units });
+        return unitsLine(change.units);
+      case 'warning':
+        updatePrefs({ warning: change.warning });
+        return warnLine(change.warning);
+      case 'haptics':
+        updatePrefs({ haptics: change.on });
+        return onOffLine('Haptics', change.on);
+      case 'speech':
+        updatePrefs({ speech: change.on });
+        return onOffLine('Guidance voice', change.on);
+      case 'speed': {
+        const speed = Math.max(0, Math.min(SPEEDS.length - 1, prefsRef.current.speed + change.delta));
+        updatePrefs({ speed });
+        return speedLine(speed);
+      }
+      case 'voice':
+        await pickVoice(change.voice); // plays it ("Hi, I'm George.")
+        for (let i = 0; i < 20 && !player.playing; i++) await sleep(50);
+        for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
+        return voiceLine(change.voice.name);
+      default:
+        return LINES.didntCatch;
     }
   }
 
@@ -1674,12 +1969,6 @@ export default function App() {
         if (findOnRef.current) stopFind(false); // already finding something else: switch
         startFind(heard.target, heard.description, heard.open_vocab ?? false, true);
         break;
-      case 'guide_on':
-        if (!guideOnRef.current) toggleGuide();
-        break;
-      case 'guide_off':
-        if (guideOnRef.current) toggleGuide();
-        break;
       case 'describe':
         if (findOnRef.current) stopFind(false);
         scan();
@@ -1690,6 +1979,7 @@ export default function App() {
       case 'settings':
         if (findOnRef.current) stopFind(false);
         openSettings();
+        settingsMenu();
         break;
       case 'stop':
         if (findOnRef.current) stopFind(false);
@@ -2561,7 +2851,6 @@ export default function App() {
             .then(async (res) => {
               if (!res.ok) throw new Error(`Server ${res.status}`);
               const data = (await res.json()) as T;
-              noteScene(data);
               if (n <= applied || !isOn()) return;
               applied = n;
               failures = 0;
@@ -2672,7 +2961,6 @@ export default function App() {
       const res = await fetch(`${API_URL}/describe`, { method: 'POST', body: form, headers: HEADERS });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       const data: DescribeResult = await res.json();
-      noteScene(data);
       setResult(data);
       setStatus('idle');
 
@@ -2818,22 +3106,8 @@ export default function App() {
     }
   }
 
-  const sceneName = scene === 'outdoor' ? 'Outdoor' : 'Indoor';
-  const whereText = mode === 'auto' ? (scene ? sceneName : 'Auto') : mode === 'indoor' ? 'Indoor' : 'Outdoor';
-  const whereLabel =
-    mode === 'auto' ? (scene ? `${sceneName}, detected automatically` : 'Indoor or outdoor, detected automatically') : whereText;
-
   const topBar = (
     <View style={styles.topBar} pointerEvents="box-none">
-      {/* Where the app thinks you are. Not a button: change it in Settings. */}
-      <View
-        style={styles.chip}
-        accessible
-        accessibilityRole="text"
-        accessibilityLabel={whereLabel}
-      >
-        <Text style={styles.chipText}>{whereText}</Text>
-      </View>
       <Pressable
         style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
         onPress={openSettings}
@@ -2842,40 +3116,6 @@ export default function App() {
         accessibilityHint="Opens settings"
       >
         <Text style={styles.chipText}>Settings</Text>
-      </Pressable>
-    </View>
-  );
-
-  const guideButton = (
-    <View style={styles.modeCell}>
-      {guideOn ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.halo,
-            { opacity: halo.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] }) },
-          ]}
-        />
-      ) : null}
-      <Pressable
-        style={({ pressed }) => [
-          styles.guide,
-          guideOn ? styles.guideOn : styles.guideOff,
-          pressed && styles.pressed,
-        ]}
-        onPress={toggleGuide}
-        accessibilityRole="switch"
-        accessibilityState={{ checked: guideOn }}
-        accessibilityLabel="Guide"
-        accessibilityHint="A voice tells you about obstacles while you walk. Walk slowly while it's on."
-      >
-        <Text
-          style={[styles.guideText, guideOn ? styles.guideTextOn : styles.guideTextOff]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-        >
-          {guideOn ? 'Guide on' : 'Guide off'}
-        </Text>
       </Pressable>
     </View>
   );
@@ -2905,7 +3145,6 @@ export default function App() {
   const modeButtons = (
     <View style={styles.modeRow}>
       {findButton}
-      {guideButton}
       {walkerButton}
     </View>
   );
@@ -3009,8 +3248,6 @@ export default function App() {
 
       {showSettings ? (
         <Settings
-          mode={mode}
-          onMode={changeMode}
           prefs={prefs}
           onPrefs={updatePrefs}
           voices={voices}
@@ -3023,8 +3260,12 @@ export default function App() {
           voiceId={voiceId}
           onPickVoice={pickVoice}
           cloneStep={cloneStep}
-          onClone={cloneTap}
+          onClone={() => cloneTap()}
+          cloneMaxS={cloneMaxS}
           onReplaySetup={replaySetup}
+          page={settingsPage}
+          onPage={onSettingsPage}
+          focus={settingsFocus}
           onClose={closeSettings}
         />
       ) : null}
@@ -3037,6 +3278,8 @@ export default function App() {
           onClose={() => setShowTargets(false)}
         />
       ) : null}
+
+      {welcomeLeaving ? <Setup leaving onGone={() => setWelcomeLeaving(false)} /> : null}
     </View>
   );
 }
@@ -3066,7 +3309,7 @@ const styles = StyleSheet.create({
     left: GUTTER,
     right: GUTTER,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
   },
   chip: {
     minHeight: 48,
