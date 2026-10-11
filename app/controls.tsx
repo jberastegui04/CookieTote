@@ -145,7 +145,7 @@ export function ToggleRow(p: { label: string; hint: string; value: boolean; onCh
   );
 }
 
-export function LinkRow(p: { label: string; hint?: string; value?: string; onPress: () => void; active?: boolean }) {
+export function LinkRow(p: { label: string; a11yLabel?: string; hint?: string; value?: string; onPress: () => void; active?: boolean }) {
   return (
     <Pressable
       style={({ pressed }) => [s.row, p.active && s.rowActive, pressed && s.pressed]}
@@ -154,7 +154,7 @@ export function LinkRow(p: { label: string; hint?: string; value?: string; onPre
         p.onPress();
       }}
       accessibilityRole="button"
-      accessibilityLabel={p.label}
+      accessibilityLabel={p.a11yLabel ?? p.label}
       accessibilityHint={p.hint}
     >
       <Text style={s.rowLabel}>{p.label}</Text>

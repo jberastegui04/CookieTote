@@ -151,6 +151,7 @@ STATUS_PHRASES = {
     "This records a trusted person for thirty seconds and makes a voice from it. "
     "Only record someone who has agreed. Double tap again to start recording.",
     "Microphone access is needed to record a voice.", "Could not start recording.",
+    "Recording. Speak naturally. Tap again to stop.",
     "Adding the voice, please wait.", "Voice added.", "Could not add the voice. Try again.",
     # The reasons /voices/clone gives when it refuses (voice.VoiceRejected), which the app says aloud.
     "ElevenLabs flagged this recording. Record a real person in a quiet room.",

@@ -72,6 +72,15 @@ export default function Settings(p: Props) {
       p.onNewVoiceShown();
     }
   }, [p.newVoiceId, p.voices]);
+  // Seconds into a voice recording, so the row shows that it is running (it used to just say "Stop recording").
+  const [recordedS, setRecordedS] = useState(0);
+  useEffect(() => {
+    if (p.cloneStep !== 'recording') return;
+    const started = Date.now();
+    setRecordedS(0);
+    const tick = setInterval(() => setRecordedS(Math.floor((Date.now() - started) / 1000)), 500);
+    return () => clearInterval(tick);
+  }, [p.cloneStep]);
   const [showLimits, setShowLimits] = useState(false);
   const [nameFocused, setNameFocused] = useState(false);
   const voiceName = p.voices.find((v) => v.id === p.voiceId)?.name ?? 'Default';
@@ -177,7 +186,9 @@ export default function Settings(p: Props) {
             />
           ))}
           <LinkRow
-            label={CLONE_LABEL[p.cloneStep]}
+            label={p.cloneStep === 'recording' ? `Recording… ${recordedS} of 30 s. Tap to stop` : CLONE_LABEL[p.cloneStep]}
+            // VoiceOver hears a fixed label, or it would read the row again every second.
+            a11yLabel={CLONE_LABEL[p.cloneStep]}
             hint={p.cloneStep === 'idle' ? 'Hears a consent notice first, then records for thirty seconds' : undefined}
             onPress={p.onClone}
             active={p.cloneStep === 'recording'}
