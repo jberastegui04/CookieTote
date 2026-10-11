@@ -1668,7 +1668,9 @@ export default function App() {
         walkerPlaying.current = true;
         player.replace({ uri });
         for (let i = 0; i < 80 && !player.isLoaded; i++) await sleep(25);
-        player.setPlaybackRate(1); // the speed setting is for the guide, not him
+        // Speech speed in Settings is for everything said in the app, Walker included. (He used to
+        // stay at normal speed whatever it was set to.)
+        player.setPlaybackRate(SPEEDS[prefsRef.current.speed].rate);
         player.play();
         for (let i = 0; i < 10 && !player.playing; i++) await sleep(50);
         for (let i = 0; i < 200 && player.playing && !walkerCancel.current; i++) {
@@ -1680,7 +1682,7 @@ export default function App() {
       let done = false;
       Speech.speak(text, {
         voice: walkerVoice.current,
-        rate: WALKER_FALLBACK_RATE,
+        rate: WALKER_FALLBACK_RATE * SPEEDS[prefsRef.current.speed].rate,
         pitch: WALKER_FALLBACK_PITCH,
         onDone: () => {
           done = true;

@@ -248,7 +248,7 @@ export function SpeedSlider(p: { value: number; onChange: (i: number) => void })
   return (
     <View style={s.sliderCard}>
       <View style={s.sliderHead}>
-        <Text style={s.rowLabel}>Warning speech speed</Text>
+        <Text style={s.rowLabel}>Speech speed</Text>
         <Text style={s.rowValue}>{SPEEDS[p.value].name}</Text>
       </View>
       <View
@@ -269,7 +269,7 @@ export function SpeedSlider(p: { value: number; onChange: (i: number) => void })
         onResponderMove={(e) => pick(e.nativeEvent.pageX)}
         accessible
         accessibilityRole="adjustable"
-        accessibilityLabel="Warning speech speed"
+        accessibilityLabel="Speech speed"
         accessibilityValue={{ text: SPEEDS[p.value].name }}
         accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
         onAccessibilityAction={(e) => set(p.value + (e.nativeEvent.actionName === 'increment' ? 1 : -1))}

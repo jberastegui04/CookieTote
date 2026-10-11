@@ -2,7 +2,7 @@
 export type Prefs = {
   speech: boolean; // ElevenLabs voice for warnings and the guide (off: the phone's own voice)
   haptics: boolean; // vibration for warnings and the guide
-  speed: number; // index into SPEEDS, for spoken warnings
+  speed: number; // index into SPEEDS, for everything the app says (directions, Walker, voice samples)
   warning: Warning; // the "Warn me" setting, sent with every request
   units: Units; // spoken sentences and on-screen distances
 };
