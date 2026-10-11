@@ -223,6 +223,7 @@ const ARRIVE_DISTANCE_M = 0.7;
 // is unreliable inches from a textureless object (it read 2 m with the dragon at the lens), but a
 // box this big only happens within reach.
 const ARRIVE_BOX_WIDTH = 0.6;
+const ARRIVE_BOX_DEPTH_M = 1.2; // with a big box, depth must say at least this close (or the box spills off both sides)
 const arrivalPhrase = (target: string, openVocab: boolean) =>
   openVocab
     ? "You're there. It's right in front of you."
@@ -1446,7 +1447,14 @@ export default function App() {
       findMisses.current = 0;
       setFindInfo(data);
       const nearByDepth = data.distance_m !== null && data.distance_m <= ARRIVE_DISTANCE_M;
-      const nearBySize = data.box !== null && data.box[2] >= ARRIVE_BOX_WIDTH;
+      // A big box alone isn't enough: a door (0.9 m wide) is 60% of the frame from 1.5 m away, a
+      // couch from farther. Also need depth to agree (within ARRIVE_BOX_DEPTH_M), or the box to spill
+      // past both frame edges, which is the at-the-lens case where depth misreads.
+      const spills = data.box !== null && data.box[0] <= 0.02 && data.box[0] + data.box[2] >= 0.98;
+      const nearBySize =
+        data.box !== null &&
+        data.box[2] >= ARRIVE_BOX_WIDTH &&
+        ((data.distance_m !== null && data.distance_m <= ARRIVE_BOX_DEPTH_M) || spills);
       if (data.centered && (nearByDepth || nearBySize)) {
         arrive(target);
         return;
