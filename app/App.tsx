@@ -202,9 +202,11 @@ const APPROACH_DRIFT_MS = 2000; // how often the drift sentence may repeat
 const APPROACH_REMIND_MS = 2000;
 const LOST_AFTER_MS = 4000; // not seen this long, and out of view: back to Search
 // Walking detection in Search (user acceleration, gravity removed): a smoothed level above this
-// for a second means they're walking, and the app asks them to stand still, once.
-const WALK_LEVEL = 0.5;
-const WALK_SUSTAIN_MS = 1000;
+// for WALK_SUSTAIN_MS means they're walking, and the app asks them to stand still, once.
+// Measured on an iPhone: standing and turning slowly stayed at 0.08-0.38 (one 0.3 s blip to 0.55);
+// walking peaked at 0.7-1.7 and dipped to about 0.5 at the ends. Short walks were about 1 s over.
+const WALK_LEVEL = 0.6;
+const WALK_SUSTAIN_MS = 800;
 // Approach detour: something close (or a stop) while walking toward the target. The user keeps
 // the phone pointed at the target and steps sideways, toward the open side the server reports
 // (or away from the obstacle). Target phrases and pulses are muted so nothing argues with the
