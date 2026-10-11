@@ -210,14 +210,26 @@ def _box(depth: np.ndarray, mask: np.ndarray, distance: float) -> list[float] | 
     return [round(float(v), 3) for v in (x0, y0, x1 - x0, y1 - y0)]
 
 
-def label_for(image: Image.Image, depth: np.ndarray, distance: float, box: list[float] | None) -> str | None:
+def label_for(
+    image: Image.Image, depth: np.ndarray, distance: float, box: list[float] | None, detections: list[dict] | None = None
+) -> str | None:
     """Name of the detected object that overlaps the obstacle box the most and sits at its distance, or None."""
+    det = _obstacle_detection(image, depth, distance, box, detections)
+    return LABEL_NAMES.get(det["label"], det["label"]) if det else None
+
+
+def _obstacle_detection(
+    image: Image.Image, depth: np.ndarray, distance: float, box: list[float] | None, detections: list[dict] | None = None
+) -> dict | None:
+    """The detection label_for names the obstacle by, or None. `detections` reuses a detector run."""
     if box is None:
         return None
     w, h = image.size
     bx0, by0, bx1, by1 = box[0], box[1], box[0] + box[2], box[1] + box[3]
-    best_label, best_area = None, 0.0
-    for det in _detector(image, threshold=DETECT_THRESHOLD):
+    best_det, best_area = None, 0.0
+    if detections is None:
+        detections = _detector(image, threshold=DETECT_THRESHOLD)
+    for det in detections:
         b = det["box"]
         x0, y0, x1, y1 = b["xmin"] / w, b["ymin"] / h, b["xmax"] / w, b["ymax"] / h
         inter = max(0.0, min(x1, bx1) - max(x0, bx0)) * max(0.0, min(y1, by1) - max(y0, by0))
@@ -227,8 +239,8 @@ def label_for(image: Image.Image, depth: np.ndarray, distance: float, box: list[
         # Nearest part of the detection, same percentile as the lane cells.
         region = depth[_rows(depth, (y0, y1)), _cols(depth, (x0, x1))]
         if region.size and abs(float(np.percentile(region, PERCENTILE)) - distance) <= DETECT_DEPTH_MARGIN_M:
-            best_label, best_area = det["label"], inter
-    return LABEL_NAMES.get(best_label, best_label)
+            best_det, best_area = det, inter
+    return best_det
 
 
 def round_half(meters: float) -> float:
@@ -236,32 +248,120 @@ def round_half(meters: float) -> float:
 
 
 def describe(image: Image.Image, mode: str, warning: str = "normal", units: str = "meters") -> dict:
+    """The safety answer first (the nearest obstacle, or "Path ahead looks open."), then up to
+    SCENE_MAX_OBJECTS other things the detector is sure of, nearest first: "I also see a table on your
+    left, about 3 meters, and two people on your right, about 2 meters." """
+    detect_job = _parallel.submit(_detector, image, threshold=DETECT_THRESHOLD)
     depth = depth_map(image, mode)
+    detections = detect_job.result()
     hit = find_obstacle(depth, warn_distance(mode, warning))
     if hit is None:
+        objects = scene_objects(image, depth, detections, None, units)
         return {
             "clear": True,
-            "sentence": to_sentence(None, None, None, None, units=units),
+            "sentence": _with_objects(to_sentence(None, None, None, None, units=units), objects, "I see"),
             "label": None,
             "distance_m": None,
             "direction": None,
             "height": None,
             "box": None,
             "open": None,
+            "objects": [{k: v for k, v in o.items() if k != "words"} for o in objects],
         }
-    # Detection only runs when there's something to name, so a clear path stays fast.
-    label = label_for(image, depth, hit["distance"], hit["box"])
+    named = _obstacle_detection(image, depth, hit["distance"], hit["box"], detections)
+    label = LABEL_NAMES.get(named["label"], named["label"]) if named else None
     distance_m = round_half(hit["distance"])
+    objects = scene_objects(image, depth, detections, named, units)
+    sentence = to_sentence(label, distance_m, hit["direction"], hit["height"], hit["open"], units)
     return {
         "clear": False,
-        "sentence": to_sentence(label, distance_m, hit["direction"], hit["height"], hit["open"], units),
+        "sentence": _with_objects(sentence, objects, "I also see"),
         "label": label,
         "distance_m": distance_m,
         "direction": hit["direction"],
         "height": hit["height"],
         "box": hit["box"],
         "open": hit["open"],
+        "objects": [{k: v for k, v in o.items() if k != "words"} for o in objects],
     }
+
+
+# Describe's scene list. Only detections at least this sure (real objects in the venue photos scored
+# 0.98-1.0; most false ones are under 0.9), at most this many groups, nearest first.
+SCENE_THRESHOLD = 0.9
+SCENE_MAX_OBJECTS = 3
+# Within this many degrees of straight ahead is "ahead" (the lane's middle column is about +-5).
+SCENE_AHEAD_DEG = 8
+# Farther than this isn't listed: not much use when you're about to walk, and depth is shakier there.
+SCENE_MAX_M = 8
+NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five"}
+PLURALS = {
+    "person": "people", "bus": "buses", "bench": "benches", "couch": "couches", "glass": "glasses",
+    "wine glass": "wine glasses", "knife": "knives", "mouse": "mice", "sheep": "sheep", "skis": "skis",
+    "scissors": "scissors", "sandwich": "sandwiches", "toothbrush": "toothbrushes", "skateboard": "skateboards",
+}
+
+
+def scene_objects(
+    image: Image.Image, depth: np.ndarray, detections: list[dict], skip: dict | None, units: str
+) -> list[dict]:
+    """Up to SCENE_MAX_OBJECTS groups of confidently detected things (same name, same side), nearest
+    first, leaving out `skip` (the detection already named as the obstacle). Each has label, count,
+    direction, distance_m, box (the nearest one's), and words ("two chairs on your left, about 2 meters")."""
+    w, h = image.size
+    spoken = {label: name for name, label in FIND_TARGETS.items()}  # DETR label -> what people call it
+    groups: dict[tuple[str, str], dict] = {}
+    skip_spot = _locate(skip["box"], skip["score"], w, h, depth) if skip else None
+    skip_direction = (
+        None if not skip_spot or skip_spot["_distance"] is None
+        else "ahead" if abs(skip_spot["bearing_deg"]) <= SCENE_AHEAD_DEG
+        else "right" if skip_spot["bearing_deg"] > 0 else "left"
+    )
+    if skip_direction is None:
+        skip_spot = None
+    for det in detections:
+        if det is skip or det["score"] < SCENE_THRESHOLD:
+            continue
+        spot = _locate(det["box"], det["score"], w, h, depth)
+        if spot["_distance"] is None:
+            continue
+        if spot["_distance"] > SCENE_MAX_M:
+            continue
+        name = spoken.get(det["label"], LABEL_NAMES.get(det["label"], det["label"]))
+        bearing = spot["bearing_deg"]
+        direction = "ahead" if abs(bearing) <= SCENE_AHEAD_DEG else "right" if bearing > 0 else "left"
+        if skip and skip_spot and det["label"] == skip["label"] and direction == skip_direction and (
+            abs(spot["_distance"] - skip_spot["_distance"]) <= DETECT_DEPTH_MARGIN_M
+        ):
+            continue  # a second box on the obstacle the sentence already named
+        g = groups.get((name, direction))
+        if g is None:
+            groups[name, direction] = {"label": name, "count": 1, "direction": direction,
+                                       "distance_m": spot["distance_m"], "box": spot["box"], "_d": spot["_distance"]}
+        else:
+            g["count"] += 1
+            if spot["_distance"] < g["_d"]:
+                g.update(distance_m=spot["distance_m"], box=spot["box"], _d=spot["_distance"])
+    nearest = sorted(groups.values(), key=lambda g: g["_d"])[:SCENE_MAX_OBJECTS]
+    for g in nearest:
+        n, name = g["count"], g["label"]
+        thing = (
+            f"{'an' if name[0] in 'aeiou' else 'a'} {name}" if n == 1
+            else f"{NUMBER_WORDS.get(n, 'several')} {PLURALS.get(name, name + 's')}"
+        )
+        where = "ahead" if g["direction"] == "ahead" else f"on your {g['direction']}"
+        g["words"] = f"{thing} {where}, {_find_how_far(g.pop('_d'), units)}"
+    return nearest
+
+
+def _with_objects(sentence: str, objects: list[dict], lead: str) -> str:
+    """The safety sentence, then "I see a, b, and c." """
+    sentence = sentence.rstrip(".") + "."
+    if not objects:
+        return sentence
+    words = [o["words"] for o in objects]
+    listed = words[0] if len(words) == 1 else ", ".join(words[:-1]) + ", and " + words[-1]
+    return f"{sentence} {lead} {listed}."
 
 
 def sonar(image: Image.Image, mode: str, warning: str = "normal") -> dict:
@@ -760,7 +860,7 @@ def to_sentence(
     open_side: str | None = None, units: str = "meters",
 ) -> str:
     if distance_m is None:
-        return "Path clear"
+        return "Path ahead looks open"
     tail = f". More room on the {open_side}" if open_side else ""
     meters = round(distance_m * 2) / 2  # round to half meters
     amount = feet_words(meters) if units == "feet" else f"{meters:g} {'meter' if meters == 1 else 'meters'}"

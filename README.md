@@ -6,7 +6,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 ## Features
 
-**Describe mode.** Tap anywhere on the screen. The app takes one photo, finds the closest obstacle in your walking path, and speaks it, for example "chair, about one meter, slightly left" or "obstacle at head height, one meter ahead."
+**Describe mode.** Tap anywhere on the screen. The app takes one photo, finds the closest obstacle in your walking path, and speaks it first, for example "Chair, about 1 meter, slightly left." or "Path ahead looks open." Then it names up to three other things it is sure of, nearest first: "I also see a table on your left, about 3 meters, and two people on your right, about 2 meters."
 
 **Guide mode.** A toggle you leave on while walking. The app checks depth about once a second and a voice of your choosing (including a cloned trusted voice) tells you what changed, in short general phrases: "Something ahead, about 2 meters", "Something close on your left", "Stop. Something right in front of you. More room on the right", "Path looks open". It speaks only when the situation changes, with a reminder every few seconds while something is there, and never talks over itself. One buzz on "stop". No beeps. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
@@ -66,6 +66,7 @@ Full result for describe mode. Slower, called once per tap. Also takes an option
 | `direction` | string or null | `left`, `ahead`, or `right` |
 | `height` | string or null | `foot`, `waist`, or `head` |
 | `box` | list of 4 numbers or null | obstacle outline for the overlay, as x, y, width, height in 0 to 1 of the image |
+| `objects` | list | up to 3 other confidently detected things, nearest first, each `label`, `count`, `direction`, `distance_m`, `box` (already in `sentence`) |
 | `open` | string or null | `left` or `right` if that side of the lane has nothing within the warning distance, else null. The sentence ends with "More room on the left" when set (never "clear": it only checks a narrow strip and can't see low objects) |
 | `audio_b64` | string or null | ElevenLabs WAV of the sentence (16 kHz mono, short silence at both ends), base64. Null if the key is missing or ElevenLabs fails, so the app falls back to expo-speech |
 

@@ -54,6 +54,14 @@ type DescribeResult = {
   height: 'foot' | 'waist' | 'head' | null;
   box: [number, number, number, number] | null;
   audio_b64: string | null; // WAV, base64
+  // Up to 3 other things the detector is sure of, nearest first (already in `sentence`).
+  objects?: {
+    label: string;
+    count: number;
+    direction: 'left' | 'ahead' | 'right';
+    distance_m: number | null;
+    box: [number, number, number, number];
+  }[];
 };
 
 // Matches POST /sonar in the README.
