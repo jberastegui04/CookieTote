@@ -158,6 +158,7 @@ const DOWNGRADE_STREAK = 2;
 // target nears the center of the frame (bearing 0).
 const FIND_REMIND_MS = 3000;
 const FIND_AHEAD_DEG = 8;
+const FIND_CENTERED_DEG = 5; // within this, you're facing it (FIND_CENTERED_DEG in pipeline.py)
 const FIND_NEAR_DEG = 16;
 // Remembered heading. The camera sees about 52 degrees, so once the target has been seen the app
 // notes which way the phone was pointing (gyro) and keeps guiding by that when it's out of view:
@@ -1807,6 +1808,24 @@ export default function App() {
       // Guidance toward it can key off trackRef.current.locked.
       notify(Haptics.NotificationFeedbackType.Success);
       lockSound.seekTo(0).then(() => lockSound.play()).catch(() => {});
+    }
+    // Once locked, the voice follows the track, not the frame. The open-vocabulary detector's
+    // score for a small or oddly worded target wanders in and out of "no match" from frame to
+    // frame, which used to say "No match yet. Turn slowly." right after the lock chime. A locked
+    // track still in view counts as a sighting at its bearing and blended distance.
+    const track = trackRef.current;
+    const view = !data.found && track?.locked ? trackView(track, headingAtCapture ?? headingRef.current, Date.now()) : null;
+    if (view?.box && track) {
+      const bearing = view.bearing_deg;
+      data = {
+        ...data,
+        found: true,
+        bearing_deg: bearing,
+        distance_m: track.distance,
+        centered: Math.abs(bearing) <= FIND_CENTERED_DEG,
+        box: view.box,
+        sentence: driftSentence(bearing) ?? lastSentence.current ?? data.sentence,
+      };
     }
     if (data.found && data.bearing_deg !== null) {
       lastFoundAt.current = Date.now();
