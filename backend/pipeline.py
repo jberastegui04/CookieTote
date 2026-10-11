@@ -139,9 +139,10 @@ def _cell(depth: np.ndarray, mask: np.ndarray, ys: tuple[float, float], xs: tupl
     return float(np.percentile(values, PERCENTILE))
 
 
-def find_obstacle(depth: np.ndarray, warn_m: float) -> dict | None:
+def find_obstacle(depth: np.ndarray, warn_m: float, mask: np.ndarray | None = None) -> dict | None:
     """Closest lane region within the warning distance, or None if the path is clear."""
-    mask = obstacle_mask(depth)
+    if mask is None:
+        mask = obstacle_mask(depth)
     best = None
     cells = {}  # (direction, height) -> distance
     for direction, xs in COLUMNS.items():
@@ -266,8 +267,8 @@ def sonar(image: Image.Image, mode: str, warning: str = "normal") -> dict:
     return _sonar_result(depth_map(image, mode), warn_distance(mode, warning))
 
 
-def _sonar_result(depth: np.ndarray, warn_m: float) -> dict:
-    hit = find_obstacle(depth, warn_m)
+def _sonar_result(depth: np.ndarray, warn_m: float, mask: np.ndarray | None = None) -> dict:
+    hit = find_obstacle(depth, warn_m, mask)
     if hit is None:
         return {"clear": True, "distance_m": None, "direction": None, "open": None}
     # Finer than half meters so the guide's thresholds change smoothly as you walk.
@@ -586,29 +587,75 @@ def find(
         result["_distance"] = best["_distance"]
     else:
         candidates = []
-    result["sentence"] = find_sentence(
-        target, result["direction"], result.pop("_distance", None), result["match"], units
-    )
+    target_distance = result.pop("_distance", None)
+    result["sentence"] = find_sentence(target, result["direction"], target_distance, result["match"], units)
     for c in candidates:
         c.pop("_distance")
     result["candidates"] = candidates
-    obstacle = _sonar_result(depth, max(warn_distance(mode, warning), FIND_OBSTACLE_M * WARNING_SCALE[warning]))
-    if (
-        result["found"] and not obstacle["clear"] and result["distance_m"] is not None
-        and obstacle["direction"] == result["direction"]
-        and abs(obstacle["distance_m"] - result["distance_m"]) <= FIND_SELF_M
-    ):
-        # Walking toward the chair, the nearest thing ahead is the chair. Not an obstacle.
-        obstacle = {"clear": True, "distance_m": None, "direction": None, "open": None}
+    warn_m = max(warn_distance(mode, warning), FIND_OBSTACLE_M * WARNING_SCALE[warning])
+    mask = obstacle_mask(depth)
+    if result["found"] and target_distance is not None:
+        # Walking toward the chair, the nearest thing ahead is the chair. Not an obstacle. Its pixels
+        # are the ones inside its box at about its distance (or behind it); anything clearly nearer,
+        # like a box on the floor in front of it, still counts. This used to drop any obstacle in the
+        # target's direction within FIND_SELF_M of its distance, which hid exactly that box.
+        bx, by, bw, bh = result["box"]
+        rows, cols = _rows(depth, (by, by + bh)), _cols(depth, (bx, bx + bw))
+        mask[rows, cols] &= depth[rows, cols] < target_distance - FIND_SELF_M
+    obstacle = _sonar_result(depth, warn_m, mask)
+    obstacle["low"] = low_obstacle(depth, mask, warn_m)
     result["obstacle"] = obstacle
     return result
+
+
+def low_obstacle(depth: np.ndarray, mask: np.ndarray, warn_m: float) -> dict | None:
+    """The nearest thing in the lane that only sticks up at foot height (a box, a bin, a step), or None.
+
+    These are the trip hazards that slide out the bottom of the frame as you walk up to them: with the
+    phone held up at the target, the floor under about the last 1.5 m isn't in view at all. They also
+    read too far up close (a box and a bin really 0.5 m away read 1.1-1.3 m). So the app warns about
+    them earlier than other obstacles, especially once `edge` is set: their near pixels reach the
+    bottom of the frame, so they're about to leave the picture.
+    """
+    best = None
+    for direction, xs in COLUMNS.items():
+        foot = _cell(depth, mask, BANDS["foot"], xs)
+        # Low only: nothing at waist height about as near (a wall, a person or a chair is both).
+        if foot <= warn_m and foot < _cell(depth, mask, BANDS["waist"], xs) - BAND_MARGIN_M:
+            if best is None or foot < best["distance"]:
+                best = {"distance": foot, "direction": direction}
+    if best is None:
+        return None
+    h, w = depth.shape
+    ys, xs = _rows(depth, BANDS["foot"]), _cols(depth, LANE_X)
+    rows, cols = np.nonzero((depth[ys, xs] <= best["distance"] + BOX_MARGIN_M) & mask[ys, xs])
+    if rows.size == 0:
+        return None
+    x0, x1 = (cols.min() + xs.start) / w, (cols.max() + 1 + xs.start) / w
+    y0, y1 = (rows.min() + ys.start) / h, (rows.max() + 1 + ys.start) / h
+    center = (x0 + x1) / 2
+    best["direction"] = "left" if center < DIRECTION_LEFT else "right" if center > DIRECTION_RIGHT else "ahead"
+    cells = {(d, b): _cell(depth, mask, ys_, xs_) for d, xs_ in COLUMNS.items() for b, ys_ in BANDS.items()}
+    return {
+        "distance_m": round(best["distance"], 1),
+        "direction": best["direction"],
+        "box": [round(float(v), 3) for v in (x0, y0, x1 - x0, y1 - y0)],
+        "edge": bool(y1 >= LOW_EDGE),
+        "open": open_side(cells, best, warn_m),
+    }
+
+
+# A low obstacle whose near pixels reach this far down the frame (fraction of the height) is at the
+# bottom edge. In the venue photos: the box and bin 0.5 m away and the stairs reach 1.0, a chair 1 m
+# away 0.84, a table 1.5 m away 0.71.
+LOW_EDGE = 0.95
 
 
 FIND_MAX_CANDIDATES = 5
 # While finding, the user is looking at the target, not the path, so obstacles ahead are reported
 # from further out than the guide's indoor 2 m (scaled by "Warn me"): about 3.5 m by default.
 FIND_OBSTACLE_M = 3.5
-# An obstacle in the target's direction at about the target's distance is the target itself.
+# Pixels inside the target's box no nearer than its distance less this are the target itself.
 FIND_SELF_M = 0.6
 
 

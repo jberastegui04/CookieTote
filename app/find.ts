@@ -19,9 +19,26 @@ export type FindResult = {
   sentence: string;
   // Every candidate this frame, best first (the first is `box`). The tracker follows one across frames.
   candidates?: { box: [number, number, number, number]; score: number; bearing_deg: number; distance_m: number | null }[];
-  obstacle: { clear: boolean; distance_m: number | null; direction: 'left' | 'ahead' | 'right' | null; open: 'left' | 'right' | null };
+  obstacle: {
+    clear: boolean;
+    distance_m: number | null;
+    direction: 'left' | 'ahead' | 'right' | null;
+    open: 'left' | 'right' | null;
+    // The nearest thing in the lane at foot height only (box, bin, step), even when it isn't the
+    // nearest obstacle. edge: it reaches the bottom of the frame, so it's about to slip out of view.
+    // Older servers don't send it.
+    low?: LowObstacle | null;
+  };
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
   locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
+};
+
+export type LowObstacle = {
+  distance_m: number;
+  direction: 'left' | 'ahead' | 'right';
+  box: [number, number, number, number];
+  edge: boolean;
+  open: 'left' | 'right' | null;
 };
 
 // The edge of the frame is about this many degrees off center (CAMERA_HALF_FOV_DEG in pipeline.py).

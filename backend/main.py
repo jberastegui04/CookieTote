@@ -138,6 +138,11 @@ DETOUR_PHRASES = {
     "Clear. Now turn left until it's in front of you.",
     "Still blocked. Back up a step.",
 }
+# Low obstacles (a box, a bin, a step) in Find: lowPhrase() in app/App.tsx.
+for where in ("ahead", "on your left", "on your right"):
+    DETOUR_PHRASES.add(f"Something low {where}.")
+    for step in ("left", "right"):
+        DETOUR_PHRASES.add(f"Something low {where}. Step to your {step}.")
 # Short status messages the app says with tell(), so they come in the chosen voice like everything
 # else (otherwise the phone's own voice cuts in). Mirrors the tell() calls in app/App.tsx.
 STATUS_PHRASES = {

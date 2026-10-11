@@ -25,7 +25,7 @@ import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Settings from './Settings';
 import FindPicker from './FindPicker';
-import { loadFindTargets } from './find';
+import { loadFindTargets, type LowObstacle } from './find';
 import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
@@ -78,7 +78,7 @@ type FindResult = {
   box: [number, number, number, number] | null;
   sentence: string;
   candidates?: Candidate[]; // every candidate this frame, best first; the tracker follows one
-  obstacle: SonarResult;
+  obstacle: SonarResult & { low?: LowObstacle | null }; // low: foot-height only (find.ts)
   stale?: boolean; // app-side: the tracker hasn't seen it for a moment, so the box is drawn faded
   locked?: boolean; // app-side: the tracker locked onto it (2 confident sightings in a row)
 };
@@ -231,8 +231,28 @@ const WALK_SUSTAIN_MS = 800;
 // the /say list (DETOUR_PHRASES in backend/main.py); change both together.
 // side is null when no side was confirmed open: then it only warns ("Stop. Something right in front
 // of you."), never "Step to your …", since stepping into space nobody checked is worse than stopping.
-type Detour = { side: 'left' | 'right' | null; startedAt: number; clearFrames: number };
+// lowSeenAt: when a low obstacle (below) last kept this detour going, 0 if none did.
+type Detour = { side: 'left' | 'right' | null; startedAt: number; clearFrames: number; lowSeenAt: number };
 const DETOUR_CLEAR_FRAMES = 2;
+// Low obstacles (obstacle.low from /find: a box, a bin, a step, only at foot height). With the phone
+// held up at the target, roughly the last 1.5 m of floor isn't in the picture, so these slide out the
+// bottom of the frame before they ever read "close", and depth reads them too far up close (a box
+// 0.5 m away read 1.3 m). So in Approach they start a detour from LOW_DETOUR_M (scaled by "Warn me"),
+// or at once when they reach the bottom edge. And a detour one started holds for LOW_PASS_MS after it
+// was last seen: dropping out of the picture doesn't mean it's out of the way.
+const LOW_DETOUR_M = 2;
+const LOW_PASS_MS = 3000;
+// A low reading mostly inside the tracked target's box is the target itself (the server leaves the
+// target out only on frames where it detected it).
+const LOW_IN_TARGET = 0.5;
+const lowPhrase = (obstacle: Side, step: 'left' | 'right' | null) =>
+  `Something low ${obstacle === 'ahead' ? 'ahead' : `on your ${obstacle}`}.${step ? ` Step to your ${step}.` : ''}`;
+// Fraction of box a's area that lies inside box b (both x, y, width, height).
+function insideFraction(a: [number, number, number, number], b: [number, number, number, number]): number {
+  const w = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]);
+  const h = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]);
+  return w > 0 && h > 0 && a[2] * a[3] > 0 ? (w * h) / (a[2] * a[3]) : 0;
+}
 const DETOUR_STUCK_MS = 8000; // still blocked after this long: say to back up, and start over
 const DETOUR_STUCK_PHRASE = 'Still blocked. Back up a step.';
 // Find also says when something is ahead further out (the server reports up to about 3.5 m while
@@ -1181,6 +1201,9 @@ export default function App() {
       .then(() => fetchPhrase(detourPhrase('left', 'right', false)))
       .then(() => fetchPhrase(detourClearPhrase('left')))
       .then(() => fetchPhrase(detourClearPhrase('right')))
+      .then(() => fetchPhrase(lowPhrase('ahead', 'left')))
+      .then(() => fetchPhrase(lowPhrase('ahead', 'right')))
+      .then(() => fetchPhrase(lowPhrase('ahead', null)))
       .then(() => fetchPhrase(classify(3, 'ahead', null, guideSettings()).text))
       .then(() => fetchPhrase(classify(2, 'ahead', null, guideSettings()).text))
       .then(() => fetchPhrase(tiltPhrase('down')))
@@ -1871,6 +1894,7 @@ export default function App() {
     if (walkerBusy()) return; // a frame from before Walker was called; Find is paused
     const target = findTargetRef.current ?? data.target;
     const phase = findPhaseRef.current;
+    const serverFound = data.found; // before the tracker fills in a locked target below
     findBlanks.current = data.found ? 0 : findBlanks.current + 1;
     // The tracker follows one object across answers (tracker.ts); older servers send no candidates.
     const candidates =
@@ -1941,6 +1965,13 @@ export default function App() {
     // warnings were noise. Something close (or a stop) starts a detour: step sideways, keep the
     // phone on the target, and turn back once the obstacle reads clear for a couple of answers.
     const o = data.obstacle;
+    // A low obstacle near enough to act on (see LOW_DETOUR_M), unless it's the target itself.
+    const low =
+      o.low &&
+      (o.low.edge || o.low.distance_m <= LOW_DETOUR_M * WARNING_SCALE[guideSettings().warning ?? 'normal']) &&
+      !(!serverFound && data.box && insideFraction(o.low.box, data.box) >= LOW_IN_TARGET)
+        ? o.low
+        : null;
     // Exception: the few steps after "Not in sight from here". They're walking, so warn about what's
     // close (no detour: there's no target to turn back to), and don't repeat "Turn slowly".
     if (phase === 'search' && exploreUntil.current && !data.found) {
@@ -1953,6 +1984,10 @@ export default function App() {
           buzz(Haptics.ImpactFeedbackStyle.Heavy);
         }
         situation.current = r;
+      } else if (low) {
+        const key = `close:low:${low.direction}`;
+        if (situation.current?.key !== key) buzz(Haptics.ImpactFeedbackStyle.Heavy);
+        situation.current = { key, text: lowPhrase(low.direction, null), stop: false };
       }
       setFindInfo(data);
       return;
@@ -1971,22 +2006,39 @@ export default function App() {
       phase === 'approach' && !o.clear && o.distance_m !== null && !isTarget
         ? classify(o.distance_m, o.direction ?? 'ahead', o.open ?? null, guideSettings())
         : null;
-    const danger = phase === 'approach' && reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
+    const close = phase === 'approach' && reading && (reading.stop || reading.key.startsWith('close')) ? reading : null;
+    // A low obstacle starts or keeps a detour too, said as "Something low ..." unless something else
+    // is nearer or it's a Stop.
+    const lowDanger =
+      phase === 'approach' && low && !close?.stop && (!close || low.distance_m <= (o.distance_m ?? Infinity)) ? low : null;
+    const danger: Situation | null = lowDanger
+      ? { key: `close:low:${lowDanger.direction}`, text: lowPhrase(lowDanger.direction, null), stop: false }
+      : close;
     const now = Date.now();
     const detour = detourRef.current;
+    if (phase === 'approach' && low && detour) detour.lowSeenAt = now;
     if (danger) {
-      const obstacleSide: Side = o.direction ?? 'ahead';
+      const obstacleSide: Side = lowDanger ? lowDanger.direction : (o.direction ?? 'ahead');
       // Only say which way to step when the server confirmed that side is open (nothing within the
       // warning distance). Otherwise just warn, and after DETOUR_STUCK_MS say to back up, which
       // retraces ground the user just walked.
-      const open = o.open ?? null;
+      const open = lowDanger ? lowDanger.open : (o.open ?? null);
       const say = (side: 'left' | 'right' | null) =>
         side
-          ? { key: `detour:${side}:${danger.stop}`, text: detourPhrase(obstacleSide, side, danger.stop), stop: danger.stop }
+          ? {
+              key: `detour:${side}:${danger.stop}:${lowDanger ? 'low' : ''}`,
+              text: lowDanger ? lowPhrase(obstacleSide, side) : detourPhrase(obstacleSide, side, danger.stop),
+              stop: danger.stop,
+            }
           : { ...danger, key: `detour:hold:${danger.key}` };
       if (!detour || (detour.side === null && open)) {
         // New detour, or a held one that now has a confirmed open side to step to.
-        detourRef.current = { side: open, startedAt: detour?.startedAt ?? now, clearFrames: 0 };
+        detourRef.current = {
+          side: open,
+          startedAt: detour?.startedAt ?? now,
+          clearFrames: 0,
+          lowSeenAt: low ? now : (detour?.lowSeenAt ?? 0),
+        };
         const next = say(open);
         if (danger.stop) interruptForStop(next);
         situation.current = next;
@@ -2008,7 +2060,8 @@ export default function App() {
     }
     if (detour) {
       detour.clearFrames += 1;
-      if (detour.clearFrames >= DETOUR_CLEAR_FRAMES) {
+      // A low obstacle that dropped out of the bottom of the picture still counts for LOW_PASS_MS.
+      if (detour.clearFrames >= DETOUR_CLEAR_FRAMES && now - detour.lowSeenAt >= LOW_PASS_MS) {
         detourRef.current = null;
         if (detour.side) {
           situation.current = { key: `detour:clear:${now}`, text: detourClearPhrase(detour.side), stop: false };
