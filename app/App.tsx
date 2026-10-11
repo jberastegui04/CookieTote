@@ -552,6 +552,23 @@ const DIRECTION_WORD = { left: 'slightly left', ahead: 'ahead', right: 'slightly
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // Photos come back portrait 3:4; the preview fills the screen and crops the sides.
 const PHOTO_ASPECT = 3 / 4;
+// Describe's object boxes (objectMarks): skip one when more than this fraction of the smaller of it
+// and a box already drawn overlaps; tags are sized from their text (no layout pass) and kept clear
+// of the top bar and the card at the bottom.
+const OBJECT_OVERLAP_MAX = 0.5;
+const OBJECT_TAG_H = 32;
+const OBJECT_TAG_PAD = 10;
+const OBJECT_TAG_CHAR_W = 9.5; // about one character of the 16 pt bold tag text
+const TAG_CHAR_W = 12; // the same for the obstacle's 20 pt tag
+const BOTTOM_CARD_H = 240;
+type Rect = { left: number; top: number; width: number; height: number };
+// How much of the smaller of two rectangles the other covers, 0 to 1.
+function overlapFraction(a: Rect, b: Rect): number {
+  const w = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const h = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  const smaller = Math.min(a.width * a.height, b.width * b.height);
+  return w > 0 && h > 0 && smaller > 0 ? (w * h) / smaller : 0;
+}
 
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -2760,16 +2777,56 @@ export default function App() {
             : 'Tap anywhere';
   const label = findOn ? capitalize(findTarget ?? '') : found?.label ? capitalize(found.label) : null;
 
-  // Where the obstacle (or find target) box lands on screen: the 3:4 photo is scaled to cover the screen.
-  let box: { left: number; top: number; width: number; height: number } | null = null;
-  const shownBox = findOn ? (liveFind?.box ?? null) : found?.box;
-  if (shownBox && !busy) {
-    const [x, y, w, h] = shownBox;
+  // Where a box lands on screen: the 3:4 photo is scaled to cover the screen.
+  const toScreen = ([x, y, w, h]: [number, number, number, number]): Rect => {
     const scale = Math.max(screenW / PHOTO_ASPECT, screenH); // displayed photo height
     const photoW = scale * PHOTO_ASPECT;
     const offX = (screenW - photoW) / 2;
     const offY = (screenH - scale) / 2;
-    box = { left: offX + x * photoW, top: offY + y * scale, width: w * photoW, height: h * scale };
+    return { left: offX + x * photoW, top: offY + y * scale, width: w * photoW, height: h * scale };
+  };
+  // The obstacle (or find target) box.
+  const shownBox = findOn ? (liveFind?.box ?? null) : found?.box;
+  const box = shownBox && !busy ? toScreen(shownBox) : null;
+  const obstacleTagTop = box ? Math.max(SAFE.top + 72, box.top - 48) : 0;
+  const obstacleTag = label ?? 'Obstacle';
+  const obstacleTagText = `${obstacleTag}${distance != null ? ` · ${formatDistance(distance, prefs.units)}` : ''}`;
+  // Its tag stays on screen: a box near the right edge used to push it half off.
+  const obstacleTagW = obstacleTagText.length * TAG_CHAR_W + 28;
+  const obstacleTagLeft = box ? Math.max(GUTTER, Math.min(box.left, screenW - GUTTER - obstacleTagW)) : 0;
+
+  // Describe's other named things (result.objects), lighter than the obstacle box and kept tidy: one
+  // box per group (the server sends its nearest member; the tag says how many), no box that mostly
+  // covers or sits under one already drawn, and a tag that would collide goes below its box, inside
+  // it, or is left off (the box stays).
+  const objectMarks: { key: string; box: Rect; tag: { left: number; top: number; text: string } | null }[] = [];
+  if (!guideOn && !findOn && !busy && resultVisible && result?.objects?.length) {
+    const tagRect = (left: number, top: number, text: string): Rect => ({
+      left,
+      top,
+      width: text.length * OBJECT_TAG_CHAR_W + 2 * OBJECT_TAG_PAD,
+      height: OBJECT_TAG_H,
+    });
+    const drawn: Rect[] = box ? [box] : [];
+    const tags: Rect[] = box ? [{ left: obstacleTagLeft, top: obstacleTagTop, width: obstacleTagW, height: 40 }] : [];
+    const minTop = SAFE.top + 72; // below the top bar
+    const maxBottom = screenH - BOTTOM_CARD_H; // above the card
+    for (const o of result.objects) {
+      const r = toScreen(o.box);
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      if (cx < 0 || cx > screenW || cy < 0 || cy > screenH) continue; // cropped off the screen
+      if (drawn.some((d) => overlapFraction(r, d) > OBJECT_OVERLAP_MAX)) continue;
+      drawn.push(r);
+      const name = capitalize(o.label);
+      const text = `${o.count > 1 ? `${name} ×${o.count}` : name}${o.distance_m != null ? ` · ${formatDistance(o.distance_m, prefs.units)}` : ''}`;
+      const left = Math.max(GUTTER, Math.min(r.left, screenW - GUTTER - tagRect(0, 0, text).width));
+      const spot = [r.top - OBJECT_TAG_H - 4, r.top + r.height + 4, r.top + 6]
+        .map((top) => tagRect(left, top, text))
+        .find((t) => t.top >= minTop && t.top + t.height <= maxBottom && !tags.some((u) => overlapFraction(t, u) > 0));
+      if (spot) tags.push(spot);
+      objectMarks.push({ key: `${o.label}:${o.direction}`, box: r, tag: spot ? { left, top: spot.top, text } : null });
+    }
   }
 
   const sceneName = scene === 'outdoor' ? 'Outdoor' : 'Indoor';
@@ -2920,14 +2977,23 @@ export default function App() {
             <LinearGradient colors={['rgba(0,0,0,0.7)', 'transparent']} style={styles.topShade} />
             <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={styles.bottomShade} />
             <ViewfinderCorners style={styles.viewfinder} />
+            {objectMarks.map((m) => (
+              <View key={m.key} style={StyleSheet.absoluteFill} pointerEvents="none">
+                <View style={[styles.objectBox, m.box]} />
+                {m.tag ? (
+                  <View style={[styles.objectTag, { left: m.tag.left, top: m.tag.top }]}>
+                    <Text style={styles.objectTagText} numberOfLines={1}>
+                      {m.tag.text}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ))}
             {box ? (
               <>
                 <View style={[styles.box, box]} />
-                <View style={[styles.tag, { left: box.left, top: Math.max(SAFE.top + 72, box.top - 48) }]}>
-                  <Text style={styles.tagText}>
-                    {label ?? 'Obstacle'}
-                    {distance != null ? ` · ${formatDistance(distance, prefs.units)}` : ''}
-                  </Text>
+                <View style={[styles.tag, { left: obstacleTagLeft, top: obstacleTagTop }]}>
+                  <Text style={styles.tagText}>{obstacleTagText}</Text>
                 </View>
               </>
             ) : null}
@@ -3031,6 +3097,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tagText: { color: C.onAccent, fontSize: 20, ...font('bold') },
+  // Describe's other named things: same colors, thinner and a little see-through, so the obstacle
+  // box stays the one that stands out.
+  objectBox: { position: 'absolute', borderWidth: 3, borderColor: C.accent, borderRadius: 14, opacity: 0.8 },
+  objectTag: {
+    position: 'absolute',
+    backgroundColor: C.accent,
+    borderRadius: 10,
+    paddingHorizontal: OBJECT_TAG_PAD,
+    height: OBJECT_TAG_H,
+    justifyContent: 'center',
+    opacity: 0.9,
+  },
+  objectTagText: { color: C.onAccent, fontSize: 16, ...font('bold') },
   bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm, gap: SPACE.md },
   card: {
     backgroundColor: C.glass,
