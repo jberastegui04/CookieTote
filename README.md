@@ -10,7 +10,7 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Guide mode.** A toggle you leave on while walking. The app checks depth about once a second and a voice of your choosing (including a cloned trusted voice) tells you what changed, in short general phrases: "Something ahead, about 2 meters", "Something close on your left", "Stop. Something right in front of you. More room on the right", "Path looks open". It speaks only when the situation changes, with a reminder every few seconds while something is there, and never talks over itself. One buzz on "stop". No beeps. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
-**Find mode.** Tap Find, pick an object (chair, table, person, and a few more), and the voice tells you where it is as you turn: "Chair, slightly right, about 3 meters." Once it has seen the object, the app remembers which way the phone was pointing (gyro), so when you turn away it says "Chair at 2 o'clock" and keeps pulsing toward it several times a second, stronger and faster as you face it, with a double pulse when you're lined up. Within reach, it dings and says "You're there. Reach forward." An obstacle right in front still says "Stop" over everything.
+**Find mode.** Tap Find, pick an object (chair, table, person, and a few more), and the voice tells you which way to turn: "Chair, turn a little right, about 3 meters." (or "turn right" for a bigger turn), then "Straight ahead." the moment you're lined up. Once it has seen the object, the app remembers which way the phone was pointing (gyro), so when you turn away it says "Chair at 2 o'clock" and keeps pulsing toward it several times a second, stronger and faster as you face it, with a double pulse when you're lined up. Within reach, it dings and says "You're there. Reach forward." An obstacle right in front still says "Stop" over everything.
 
 **Indoor and outdoor setting.** Applies to both modes. Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors).
 
@@ -98,7 +98,7 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 | `distance_m` | number or null | distance to the target, rounded to 0.5 |
 | `centered` | boolean | within 5° of center: you're facing it |
 | `box` | list of 4 numbers or null | the target's outline, x, y, width, height in 0 to 1 of the image |
-| `sentence` | string | what to say, e.g. "Chair, slightly right, about 3 meters." or "No chair yet. Turn slowly." |
+| `sentence` | string | what to say, e.g. "Chair, turn a little right, about 3 meters." or "No chair yet. Turn slowly." |
 | `obstacle` | object | the same fields as `/sonar` (the target itself left out) plus `box`, the obstacle's outline; a "Stop" from it wins over Find. Plus `low`: the nearest foot-height-only thing in the lane (`distance_m`, `direction`, `box`, `edge`, `open`) or null. `edge` is true when it reaches the bottom of the frame, about to slip out of view |
 
 ### POST /transcribe

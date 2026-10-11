@@ -180,6 +180,7 @@ WALKER_PHRASES |= {f"Sure thing. Let's find the {t}." for t in pipeline.FIND_TAR
 # Find: keeping the target in the picture up and down. Mirrors tiltPhrase and offFramePhrase in app/App.tsx.
 FRAMING_PHRASES = {
     "Tilt the phone down a little.", "Tilt the phone up a little.",
+    "Straight ahead.",  # the moment a turn lines the user up with the target (LINED_UP_PHRASE)
     "It's below the camera. Tilt the phone down.", "It's above the camera. Tilt the phone up.",
 }
 GUIDE_PHRASES = (

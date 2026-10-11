@@ -481,15 +481,22 @@ def _find_how_far(distance: float, units: str = "meters") -> str:
     return f"about {meters:g} {'meter' if meters == 1 else 'meters'}"
 
 
+# Find tells the user what to do, in two sizes: up to this many degrees off is "turn a little left",
+# beyond it (out to the edge of the frame) "turn left". "Slightly left" said where the target was, not
+# what to do, and gave no idea of how much. Mirrored in driftSentence() in app/App.tsx.
+FIND_SMALL_TURN_DEG = 15
+
+
 def find_sentence(
-    target: str, direction: str | None, distance: float | None, match: str | None = None, units: str = "meters"
+    target: str, direction: str | None, distance: float | None, match: str | None = None, units: str = "meters",
+    small: bool = True,
 ) -> str:
     """With a description, the sentence never repeats the user's words ("Found it", not "Red bench"),
     so every possible sentence can be on the /say allowlist and a cloned voice can't be made to say
     arbitrary text."""
     if direction is None or distance is None:
         return "No match yet. Turn slowly." if match else f"No {target} yet. Turn slowly."
-    where = {"left": "slightly left", "right": "slightly right"}.get(direction, "ahead")
+    where = "ahead" if direction not in ("left", "right") else f"turn a little {direction}" if small else f"turn {direction}"
     name = {"yes": "Found it", "possible": "Possible match"}.get(match or "", target.capitalize())
     return f"{name}, {where}, {_find_how_far(distance, units)}."
 
@@ -500,12 +507,12 @@ def find_phrases() -> set[str]:
     distances = [round(0.5 + 0.05 * i, 2) for i in range(int((FIND_MAX_SPOKEN_M - 0.5) / 0.05) + 2)]
     phrases = {find_sentence("", None, None, "no")}
     for units in UNITS:
-        for direction in ("left", "ahead", "right"):
+        for direction, small in (("left", True), ("left", False), ("ahead", True), ("right", True), ("right", False)):
             for d in distances:
                 for target in FIND_TARGETS:
-                    phrases.add(find_sentence(target, direction, d, None, units))
+                    phrases.add(find_sentence(target, direction, d, None, units, small))
                 for match in ("yes", "possible"):
-                    phrases.add(find_sentence("", direction, d, match, units))
+                    phrases.add(find_sentence("", direction, d, match, units, small))
     for target in FIND_TARGETS:
         phrases.add(find_sentence(target, None, None))
     return phrases
@@ -593,7 +600,8 @@ def find(
     else:
         candidates = []
     target_distance = result.pop("_distance", None)
-    result["sentence"] = find_sentence(target, result["direction"], target_distance, result["match"], units)
+    small = result["bearing_deg"] is None or abs(result["bearing_deg"]) <= FIND_SMALL_TURN_DEG
+    result["sentence"] = find_sentence(target, result["direction"], target_distance, result["match"], units, small)
     for c in candidates:
         c.pop("_distance")
     result["candidates"] = candidates
