@@ -208,7 +208,14 @@ const SEARCH_AGAIN_PHRASE = 'Now stop, and turn slowly again.';
 const HANDOFF_CENTERED_MS = 1000; // facing it this long (and seen recently) hands off to Approach
 const HANDOFF_SEEN_WITHIN_MS = 3000;
 const APPROACH_DRIFT_MS = 2000; // how often the drift sentence may repeat
-const APPROACH_REMIND_MS = 2000;
+// How often an unchanged phrase is repeated while walking toward the target. Was 2 s, which with a
+// 2 s phrase meant the voice never stopped.
+const APPROACH_REMIND_MS = 4000;
+const URGENT_REMIND_MS = 2000; // Stop, close-by warnings and detour steps keep repeating quickly
+// A breath after every phrase before the next one starts. Directions were running into each other
+// with no pause, which is too much to take in while walking. Safety speech doesn't wait. Nothing is
+// queued meanwhile: when the pause ends, the voice says whatever is true then.
+const VOICE_GAP_MS = 900;
 const LOST_AFTER_MS = 4000; // not seen this long, and out of view: back to Search
 // Walking detection in Search (user acceleration, gravity removed): a smoothed level above this
 // for WALK_SUSTAIN_MS means they're walking, and the app asks them to stand still, once.
@@ -508,6 +515,7 @@ export default function App() {
   const speechBusy = useRef(false);
   const speakingStop = useRef(false);
   const speechToken = useRef(0);
+  const speechCut = useRef(0); // bumped when a phrase is cut on purpose (a Stop), so its wait ends
   const [walkerState, setWalkerState] = useState<WalkerState>('idle');
   const walkerStateRef = useRef<WalkerState>('idle');
   const [walkerText, setWalkerText] = useState<string | null>(null);
@@ -1767,9 +1775,23 @@ export default function App() {
     try {
       const uri = prefsRef.current.speech ? await fetchPhrase(text) : null;
       if (uri) {
+        const cut = speechCut.current;
         await playUri(uri);
-        for (let i = 0; i < 10 && !player.playing; i++) await sleep(50);
-        for (let i = 0; i < 100 && player.playing; i++) await sleep(100);
+        // Wait for the clip to end. If the player is slow to report that it started, this used to
+        // give up after half a second, and the next phrase then cut this one off mid-word. Now the
+        // clip's own length is the fallback clock.
+        const started = Date.now();
+        const lengthMs = player.duration > 0 ? (player.duration * 1000) / SPEEDS[prefsRef.current.speed].rate : 0;
+        let seenPlaying = false;
+        for (;;) {
+          await sleep(50);
+          const elapsed = Date.now() - started;
+          if (speechToken.current !== token || speechCut.current !== cut) break; // cut on purpose
+          if (player.playing) seenPlaying = true;
+          else if (seenPlaying) break; // finished
+          else if (elapsed > Math.max(600, lengthMs + 300)) break; // never said it was playing: trust the clock
+          if (elapsed > 12000) break;
+        }
       } else {
         await new Promise<void>((resolve) => {
           Speech.speak(text, {
@@ -1793,6 +1815,7 @@ export default function App() {
   // Cuts whatever the voice is saying so a "stop" can be spoken right away.
   function interruptForStop(next: Situation) {
     if (next.stop && speechBusy.current && !speakingStop.current) {
+      speechCut.current += 1;
       player.pause();
       Speech.stop();
     }
@@ -2216,8 +2239,9 @@ export default function App() {
   // and never talks over a describe sentence or over itself.
   async function voiceLoop() {
     const gen = ++voiceGen.current;
-    let lastKey: string | null = null;
+    let lastText: string | null = null;
     let lastSpokenAt = 0;
+    let lastEndedAt = 0;
     while (loopsOn() && voiceGen.current === gen) {
       const s = situation.current;
       // Routine sentences wait while someone is talking to Walker. Safety ones never wait.
@@ -2226,9 +2250,18 @@ export default function App() {
         await sleep(100);
         continue;
       }
-      const changed = s.key !== lastKey;
+      // A pause after each phrase (VOICE_GAP_MS). Safety speech and the hand-off cue don't wait for it.
+      if (!isUrgent(s) && s.key !== 'handoff' && Date.now() - lastEndedAt < VOICE_GAP_MS) {
+        await sleep(100);
+        continue;
+      }
+      // "Changed" means the words changed. Two parts of Find write the same sentence under different
+      // keys (and some keys carry a timestamp), which made the voice repeat itself straight away.
+      const changed = s.text !== lastText;
       const remindAfter = findOnRef.current
-        ? findPhaseRef.current === 'approach'
+        ? isUrgent(s)
+          ? URGENT_REMIND_MS
+          : findPhaseRef.current === 'approach'
           ? APPROACH_REMIND_MS
           : FIND_REMIND_MS
         : s.key.startsWith('far')
@@ -2245,14 +2278,17 @@ export default function App() {
         (findOnRef.current && s.key.startsWith('far:'));
       const remind = s.key !== OPEN.key && !oneShot && Date.now() - lastSpokenAt > remindAfter;
       if (!changed && !remind) {
+        // The same words were the last thing said: that counts as said, so the far-ahead hold can end.
+        if (aheadWarned.current?.key === s.key && aheadWarned.current.spokenAt === null) aheadWarned.current.spokenAt = Date.now();
         await sleep(100);
         continue;
       }
-      lastKey = s.key;
+      lastText = s.text;
       lastSpokenAt = Date.now();
       if (aheadWarned.current && aheadWarned.current.key === s.key) aheadWarned.current.spokenAt = Date.now();
       setGuideText(s.text);
       await speakPhrase(s.text, s.stop);
+      lastEndedAt = Date.now();
     }
   }
 
