@@ -105,7 +105,7 @@ export function WalkerBubble(p: { state: WalkerState; text: string | null }) {
   return (
     <View style={styles.bubble} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <WalkerIcon size={30} talking={p.state === 'talking'} />
-      <Text style={styles.bubbleText} numberOfLines={3}>
+      <Text style={styles.bubbleText} numberOfLines={5}>
         {p.state === 'talking' && p.text ? p.text : STATE_TEXT[p.state]}
       </Text>
     </View>

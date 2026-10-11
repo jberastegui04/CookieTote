@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Header, Tap, VoiceList } from './controls';
@@ -13,7 +13,9 @@ type Props = {
   voices: Voice[];
   voiceId: string | null;
   onPickVoice: (v: Voice) => void;
+  onStart: () => void; // Get started: Walker introduces himself and asks for a voice
   onFinish: () => void;
+  walker: ReactNode; // Walker's bubble, shown while he talks
 };
 
 // First launch: a welcome screen, then one step: pick a voice. Everything else, like indoor or
@@ -41,43 +43,33 @@ export default function Setup(p: Props) {
     transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
   };
 
+  // The welcome is a poster: all yellow, the mark big in the middle, the name, one line, and a
+  // black Get started. What each feature does is in Walker's help ("Hey Walker, help").
   if (step === 0) {
     return (
-      <View style={styles.screen}>
-        <DotGrid />
-        <StatusBar style="light" />
-        <Animated.View style={fadeIn}>
-          <ScrollView bounces={false} contentContainerStyle={styles.welcome}>
-            <View style={styles.hero}>
-              <Logo inverse width={128} />
-              <Text style={styles.appName} accessibilityRole="header">
-                WatchIt
-              </Text>
-              <Text style={styles.tagline}>Find things. Avoid obstacles.</Text>
-            </View>
-            <View style={styles.body}>
-              {[
-                ['Find', 'Say what you need. A voice leads you to it.'],
-                ['Guide', 'Warns you about what is ahead.'],
-                ['Tap anywhere', 'Hear what is in front of you.'],
-                ['Press and hold', 'Talk to Walker. Say what you need.'],
-              ].map(([t, b]) => (
-                <View key={t} style={styles.howTo} accessible>
-                  <View style={styles.howToHead}>
-                    <View style={styles.tick} />
-                    <Text style={styles.howToTitle}>{t}</Text>
-                  </View>
-                  <Text style={styles.howToBody}>{b}</Text>
-                </View>
-              ))}
-              <Text style={styles.footnote}>
-                Not a cane. Does not detect curbs, drop-offs or moving cars.
-              </Text>
-            </View>
-          </ScrollView>
-          <View style={styles.footer}>
-            <BigButton label="Get started" hint="Then pick a voice" onPress={() => setStep(1)} />
+      <View style={[styles.screen, styles.poster]}>
+        <StatusBar style="dark" />
+        <Animated.View style={[fadeIn, styles.posterBody]}>
+          <View style={styles.posterMiddle}>
+            <Logo inverse width={230} />
+            <Text style={styles.posterName} accessibilityRole="header" accessibilityLabel="Cyclops">
+              CYCLOPS
+            </Text>
+            <Text style={styles.posterLine}>Find things. Avoid obstacles.</Text>
           </View>
+          <Text style={styles.posterNote}>Not a cane. Does not detect curbs, drop-offs or moving cars.</Text>
+          <Tap
+            style={styles.posterButton}
+            onPress={() => {
+              setStep(1);
+              p.onStart();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Get started"
+            accessibilityHint="Then pick a voice"
+          >
+            <Text style={styles.posterButtonText}>Get started</Text>
+          </Tap>
         </Animated.View>
       </View>
     );
@@ -90,6 +82,7 @@ export default function Setup(p: Props) {
       <Header title="Pick a voice" sub="Tap one to hear it." onBack={() => setStep(0)} backHint="Goes back to the welcome screen" />
       <Animated.View style={fadeIn}>
         <ScrollView contentContainerStyle={styles.content}>
+          <View style={styles.walker}>{p.walker}</View>
           <VoiceList voices={p.voices} selected={p.voiceId} onPick={p.onPickVoice} />
         </ScrollView>
         <View style={styles.footer}>
@@ -112,26 +105,22 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
   content: { paddingHorizontal: GUTTER, paddingTop: SPACE.xl, paddingBottom: SPACE.xl },
   footer: { paddingHorizontal: GUTTER, paddingTop: SPACE.md, paddingBottom: SAFE.bottom + SPACE.sm },
-  welcome: { paddingBottom: SPACE.xl },
-  // Yellow hero at the top of the welcome screen, running up under the status bar.
-  hero: {
-    backgroundColor: C.accent,
-    paddingTop: SAFE.top + SPACE.xxl,
-    paddingBottom: SPACE.xxl,
-    paddingHorizontal: GUTTER,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
+  poster: { backgroundColor: C.accent },
+  walker: { marginBottom: SPACE.md },
+  posterBody: { paddingHorizontal: GUTTER, paddingTop: SAFE.top, paddingBottom: SAFE.bottom + SPACE.sm },
+  posterMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  posterName: { color: C.onAccent, fontSize: 54, letterSpacing: 8, marginTop: SPACE.xl, ...font('heavy') },
+  posterLine: { color: C.onAccent, fontSize: 22, marginTop: SPACE.sm, textAlign: 'center', ...font('semibold') },
+  posterNote: { color: C.onAccent, fontSize: 17, lineHeight: 23, textAlign: 'center', marginBottom: SPACE.lg, ...font('regular') },
+  // Black on the yellow poster, so it reads as the one thing to press.
+  posterButton: {
+    backgroundColor: C.onAccent,
+    minHeight: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  appName: { color: C.onAccent, fontSize: 48, marginTop: SPACE.xl, ...font('heavy') },
-  tagline: { color: C.onAccent, fontSize: 24, marginTop: SPACE.xs, ...font('regular') },
-  body: { paddingHorizontal: GUTTER, paddingTop: SPACE.xxl },
-  howTo: { marginBottom: SPACE.xl },
-  // The same small yellow square as the section labels in Settings.
-  howToHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
-  tick: { width: 10, height: 10, borderRadius: 2, backgroundColor: C.accent },
-  howToTitle: { color: C.accent, fontSize: 24, ...font('bold') },
-  howToBody: { color: C.ink2, fontSize: 19, marginTop: SPACE.xs, marginLeft: 10 + SPACE.sm, ...font('regular') },
-  footnote: { color: C.ink2, fontSize: 17, lineHeight: 24, marginTop: SPACE.sm, ...font('regular') },
+  posterButtonText: { color: C.accent, fontSize: 28, ...font('bold') },
   big: {
     backgroundColor: C.accent,
     minHeight: 80,

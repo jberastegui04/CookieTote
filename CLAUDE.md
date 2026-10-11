@@ -1,4 +1,6 @@
-# Obstacle Alert
+# Cyclops
+
+(Formerly Obstacle Alert, then WatchIt.)
 
 Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and low vision users about stationary obstacles in their walking path, on any phone using only the camera. Team of three, all new to hackathons: favor the simplest thing that works, give exact commands, and push back on added scope. `README.md` has the full plan, schedule, and cut order.
 

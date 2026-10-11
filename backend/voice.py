@@ -18,6 +18,11 @@ VOICES = [
     {"id": "JBFqnCBsd6RMkjVDRZzb", "name": "George"},
 ]
 SAMPLE_SENTENCE = "Chair, about 1 meter, slightly left"
+
+
+def sample_sentence(name: str) -> str:
+    """What a voice says when you tap it in the app: its own name first, so you know which one it is."""
+    return f"Hi, I'm {name}. {SAMPLE_SENTENCE}."
 # Cloned voices, recorded in the app from trusted people who agreed to it. New ones are named
 # "Trusted voice", "Trusted voice 2", ... until the user renames them in Settings.
 CLONE_NAME = "Trusted voice"
@@ -104,7 +109,7 @@ def clone_voice(audio: bytes, filename: str, content_type: str, name: str = "") 
         headers=_headers(),
         data={
             "name": name,
-            "description": "Obstacle Alert. Recorded in the app with the speaker's consent.",
+            "description": "Cyclops. Recorded in the app with the speaker's consent.",
             "remove_background_noise": "true",
         },
         files={"files": (filename, audio, content_type)},

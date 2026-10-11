@@ -676,6 +676,7 @@ export default function App() {
   const walkerHolds = useRef(false);
   const walkerVoice = useRef<string | undefined>(undefined); // identifier of his built-in fallback voice
   const walkerPlaying = useRef(false); // his ElevenLabs clip is on the player
+  const walkerCancel = useRef(false); // stopWalker: cut him off now
   // Each start of Find, the voice loop, or the pulse loop bumps its counter, and an older copy still
   // running sees that and quits. So starting Find again while finding (Walker: "find the door") never
   // leaves two loops talking at once.
@@ -797,7 +798,9 @@ export default function App() {
         voices={voices}
         voiceId={voiceId}
         onPickVoice={pickVoice}
+        onStart={() => walkerReply(LINES.introVoice)}
         onFinish={finishSetup}
+        walker={<WalkerBubble state={walkerState} text={walkerText} />}
       />
     );
   }
@@ -899,6 +902,9 @@ export default function App() {
   function finishSetup() {
     AsyncStorage.setItem(SETUP_KEY, '1').catch(() => {});
     setSetupDone(true);
+    // Walker explains the basics once the camera is up.
+    stopWalker();
+    setTimeout(() => walkerReply(LINES.introHowTo), 700);
   }
 
   function replaySetup() {
@@ -1001,6 +1007,7 @@ export default function App() {
     const clean = name.trim().slice(0, 30);
     if (!clean) return;
     setVoices((prev) => prev.map((v) => (v.id === id ? { ...v, name: clean } : v)));
+    sampleFiles.current.delete(id); // its sample says its name, so fetch the new one next time
     try {
       const form = new FormData();
       form.append('name', clean);
@@ -1206,6 +1213,7 @@ export default function App() {
 
   // Picks a voice from the list, plays its sample sentence, and remembers the choice.
   async function pickVoice(v: Voice) {
+    stopWalker(); // his voice and the sample never overlap
     chooseVoice(v);
     await playSample(v.id);
   }
@@ -1410,8 +1418,7 @@ export default function App() {
       return;
     }
     if (state === 'talking') {
-      Speech.stop(); // walkerSpeak resolves when he stops
-      if (walkerPlaying.current) player.pause();
+      stopWalker();
       return;
     }
     if (state === 'thinking') return;
@@ -1554,7 +1561,15 @@ export default function App() {
   // Walker says something in his own voice, never the user's chosen one, and resolves when he's done.
   // With VoiceOver on, VoiceOver says it instead, so the two never double up. He waits for the guide
   // or Find to finish first, and stops at once if a safety warning comes in.
+  // Cuts Walker off mid-sentence (a voice sample is about to play, or setup moved on).
+  function stopWalker() {
+    walkerCancel.current = true;
+    Speech.stop();
+    if (walkerPlaying.current) player.pause();
+  }
+
   async function walkerSpeak(text: string) {
+    walkerCancel.current = false;
     if (screenReader.current) {
       AccessibilityInfo.announceForAccessibilityWithOptions(text, { queue: false });
       await sleep(Math.min(6000, 600 + text.length * 55)); // about how long VoiceOver takes
@@ -1577,7 +1592,7 @@ export default function App() {
         player.setPlaybackRate(1); // the speed setting is for the guide, not him
         player.play();
         for (let i = 0; i < 10 && !player.playing; i++) await sleep(50);
-        for (let i = 0; i < 200 && player.playing; i++) {
+        for (let i = 0; i < 200 && player.playing && !walkerCancel.current; i++) {
           await sleep(100);
           if (urgentNow()) player.pause();
         }
@@ -1598,7 +1613,7 @@ export default function App() {
           done = true;
         },
       });
-      for (let i = 0; i < 200 && !done; i++) {
+      for (let i = 0; i < 200 && !done && !walkerCancel.current; i++) {
         await sleep(100);
         if (urgentNow()) Speech.stop();
       }
@@ -1613,7 +1628,7 @@ export default function App() {
 
   // Walker's most likely first lines, in his voice, so his first answer isn't late.
   async function prefetchWalker() {
-    for (const text of [LINES.yes, LINES.findIt, LINES.guideOn, LINES.guideOff, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
+    for (const text of [LINES.introVoice, LINES.introHowTo, LINES.yes, LINES.findIt, LINES.guideOn, LINES.guideOff, LINES.describe, LINES.stop, LINES.cantHear, LINES.unknown]) {
       await fetchPhrase(text, WALKER_VOICE_ID);
     }
   }

@@ -1,4 +1,4 @@
-# [We will decide at some point]
+# Cyclops
 
 A mobile app that warns blind and low vision users about what's in their path. It works on any phone with no special hardware, using only the camera.
 

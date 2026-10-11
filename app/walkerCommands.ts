@@ -31,6 +31,11 @@ export const LINES = {
   didntCatch: "Sorry, I didn't catch that.",
   cantHear: "Sorry, I couldn't hear you. Try again.",
   mic: 'I need the microphone to hear you.',
+  // Setup: after Get started, and when the camera opens after Finish.
+  introVoice:
+    "Hey, I'm Walker. I'll help you find things and get around. First, pick the voice that guides you. Tap one to hear it.",
+  introHowTo:
+    "You're all set. Tap the screen to hear what's in front of you. Press and hold anywhere to talk to me, like: find the door. Ask me for help any time.",
 };
 // For the 13 known targets; anything else is LINES.findIt.
 export const findLine = (target: string) => `Sure thing. Let's find the ${target}.`;
