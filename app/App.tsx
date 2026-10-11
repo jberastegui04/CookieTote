@@ -210,12 +210,13 @@ const HANDOFF_SEEN_WITHIN_MS = 3000;
 const APPROACH_DRIFT_MS = 2000; // how often the drift sentence may repeat
 // How often an unchanged phrase is repeated while walking toward the target. Was 2 s, which with a
 // 2 s phrase meant the voice never stopped.
-const APPROACH_REMIND_MS = 4000;
+const APPROACH_REMIND_MS = 3000;
 const URGENT_REMIND_MS = 2000; // Stop, close-by warnings and detour steps keep repeating quickly
 // A breath after every phrase before the next one starts. Directions were running into each other
 // with no pause, which is too much to take in while walking. Safety speech doesn't wait. Nothing is
 // queued meanwhile: when the pause ends, the voice says whatever is true then.
-const VOICE_GAP_MS = 900;
+// 900 felt too slow on the phone; each clip already carries 0.2 s of silence at both ends.
+const VOICE_GAP_MS = 400;
 const LOST_AFTER_MS = 4000; // not seen this long, and out of view: back to Search
 // Walking detection in Search (user acceleration, gravity removed): a smoothed level above this
 // for WALK_SUSTAIN_MS means they're walking, and the app asks them to stand still, once.
