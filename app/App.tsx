@@ -270,6 +270,20 @@ const isUrgent = (s: Situation | null) =>
 // Said when Find starts. On the /say list for every target (STATUS_PHRASES in backend/main.py).
 const findingPhrase = (target: string) => `Finding ${target}. Turn slowly.`;
 const FINDING_IT = 'Finding it. Turn slowly.';
+// Up and down. The gyro remembers which way the target is left and right, but nothing knew its
+// height. Walking toward something lower than the phone (on a table, on the floor) it slides out
+// of the bottom of the picture, and a blind user can't see that happen: Find just lost it. So
+// while the target sits low (or high) in the picture, the voice says to tilt before it is gone; and if
+// it disappears right after sitting there, the voice says where it went instead of "No match yet".
+// Phrases are on the /say list (FRAMING_PHRASES in backend/main.py); change both together.
+type Tilt = 'up' | 'down';
+const TILT_START = 0.72; // box center this far down the picture (0 top, 1 bottom): tilt down. Mirrored for up.
+const TILT_STOP = 0.62; // keep saying it until the center is back inside this
+const OFF_FRAME_BLANKS = 2; // answers in a row without it before saying it went out of the picture
+const OFF_FRAME_MEMORY_MS = 10000; // how long that is believed
+const tiltPhrase = (dir: Tilt) => `Tilt the phone ${dir} a little.`;
+const offFramePhrase = (dir: Tilt) =>
+  dir === 'down' ? "It's below the camera. Tilt the phone down." : "It's above the camera. Tilt the phone up.";
 // The server's "how far" wording (_find_how_far in backend/pipeline.py), for when the app corrects
 // the distance up close (track.near in tracker.ts). Same words, so the result stays on the /say list.
 function howFar(meters: number, units: Units): string {
@@ -475,6 +489,10 @@ export default function App() {
   const exploreUntil = useRef(0); // after a full turn with no sighting: walking a few steps until then
   const findBlanks = useRef(0); // answers in a row with the target not in the frame
   const detourRef = useRef<Detour | null>(null); // stepping around something in Approach
+  const tiltRef = useRef<Tilt | null>(null); // the target sits low or high in the picture: which way to tilt
+  const wentOff = useRef<{ dir: Tilt; at: number } | null>(null); // it was last seen there, and when
+  // The voice is on tilting right now; the left/right drift phrase waits for it.
+  const framingLive = () => !!situation.current && /^(tilt|offframe):/.test(situation.current.key);
   // Last "Something ahead, about 3 meters" in Find; spokenAt is null until voiceLoop has said it.
   const aheadWarned = useRef<{ key: string; spokenAt: number | null } | null>(null);
   // While this is true nothing else (target guidance, drift) may take the situation from it.
@@ -1132,6 +1150,8 @@ export default function App() {
     saidStandStill.current = false;
     detourRef.current = null;
     aheadWarned.current = null;
+    tiltRef.current = null;
+    wentOff.current = null;
     startHeading();
     const gen = ++findGen.current;
     frameLoop(
@@ -1154,7 +1174,11 @@ export default function App() {
       .then(() => fetchPhrase(detourClearPhrase('left')))
       .then(() => fetchPhrase(detourClearPhrase('right')))
       .then(() => fetchPhrase(classify(3, 'ahead', null, guideSettings()).text))
-      .then(() => fetchPhrase(classify(2, 'ahead', null, guideSettings()).text));
+      .then(() => fetchPhrase(classify(2, 'ahead', null, guideSettings()).text))
+      .then(() => fetchPhrase(tiltPhrase('down')))
+      .then(() => fetchPhrase(tiltPhrase('up')))
+      .then(() => fetchPhrase(offFramePhrase('down')))
+      .then(() => fetchPhrase(offFramePhrase('up')));
   }
 
   // Search -> Approach: facing the target. Said once, with a double pulse.
@@ -1185,6 +1209,8 @@ export default function App() {
     saidStandStill.current = false;
     detourRef.current = null;
     aheadWarned.current = null;
+    tiltRef.current = null;
+    wentOff.current = null;
     situation.current = { key: 'lost', text: LOST_PHRASE, stop: false };
   }
 
@@ -1643,7 +1669,7 @@ export default function App() {
           await sleep(300);
           continue;
         } else if (
-          off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS && !aheadHoldLive(now)
+          off !== null && Math.abs(off) > FIND_AHEAD_DEG && now - lastDriftAt.current > APPROACH_DRIFT_MS && !aheadHoldLive(now) && !framingLive()
         ) {
           // Drifted off the target: say where it is now, from the gyro, without waiting for a frame.
           const text = driftSentence(off);
@@ -1845,12 +1871,28 @@ export default function App() {
     if (data.found && near !== null) {
       data = { ...data, distance_m: near, sentence: withHowFar(data.sentence, near, guideSettings().units ?? 'meters') };
     }
+    // Up and down (see TILT_START). From the box actually seen in this frame.
+    const seen = data.found ? (trackRef.current?.matched?.box ?? data.box) : null;
+    if (seen) {
+      const cy = seen[1] + seen[3] / 2;
+      const was = tiltRef.current;
+      tiltRef.current =
+        cy > (was === 'down' ? TILT_STOP : TILT_START) ? 'down' : cy < 1 - (was === 'up' ? TILT_STOP : TILT_START) ? 'up' : null;
+      wentOff.current = tiltRef.current ? { dir: tiltRef.current, at: Date.now() } : null;
+    }
+    // Not in the last couple of answers, right after sitting at the bottom (or top) of the picture:
+    // it left that way. The remembered direction is still good, so this is not a miss or a loss.
+    const offFrame =
+      !data.found && findBlanks.current >= OFF_FRAME_BLANKS && wentOff.current && Date.now() - wentOff.current.at < OFF_FRAME_MEMORY_MS
+        ? wentOff.current.dir
+        : null;
     // Once locked, the voice follows the track, not the frame. The open-vocabulary detector's
     // score for a small or oddly worded target wanders in and out of "no match" from frame to
     // frame, which used to say "No match yet. Turn slowly." right after the lock chime. A locked
     // track still in view counts as a sighting at its bearing and blended distance.
     const track = trackRef.current;
-    const view = !data.found && track?.locked ? trackView(track, headingAtCapture ?? headingRef.current, Date.now()) : null;
+    const view =
+      !data.found && !offFrame && track?.locked ? trackView(track, headingAtCapture ?? headingRef.current, Date.now()) : null;
     if (view?.box && track) {
       const bearing = view.bearing_deg;
       data = {
@@ -1975,6 +2017,11 @@ export default function App() {
     } else if (!reading) {
       aheadWarned.current = null;
     }
+    if (offFrame) {
+      setFindInfo(data);
+      situation.current = { key: `offframe:${offFrame}`, text: offFramePhrase(offFrame), stop: false };
+      return;
+    }
     if (data.found && data.bearing_deg !== null) {
       findMisses.current = 0;
       setFindInfo(data);
@@ -1993,7 +2040,10 @@ export default function App() {
       }
       if (phase === 'approach') {
         const off = targetOffset() ?? data.bearing_deg;
-        if (Math.abs(off) > FIND_AHEAD_DEG) {
+        if (tiltRef.current) {
+          // About to leave the picture: fix that first. Left and right is remembered, this isn't.
+          situation.current = { key: `tilt:${tiltRef.current}`, text: tiltPhrase(tiltRef.current), stop: false };
+        } else if (Math.abs(off) > FIND_AHEAD_DEG) {
           // Drifted off it; the live direction comes from the gyro.
           const text = driftSentence(off) ?? data.sentence;
           lastDriftAt.current = Date.now();
