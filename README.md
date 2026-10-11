@@ -10,13 +10,23 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 
 **Guide mode.** A toggle you leave on while walking. The app checks depth about once a second and a voice of your choosing (including a cloned trusted voice) tells you what changed, in short general phrases: "Something ahead, about 2 meters", "Something close on your left", "Stop. Something right in front of you. More room on the right", "Path looks open". It speaks only when the situation changes, with a reminder every few seconds while something is there, and never talks over itself. One buzz on "stop". No beeps. Readings are a second or two old, so warnings start a bit further out and you still walk carefully.
 
-**Find mode.** Tap Find, pick an object (chair, table, person, and a few more), and the voice tells you which way to turn: "Chair, turn a little right and walk about 3 meters." (or "turn right" for a bigger turn), then "Straight ahead." the moment you're lined up. Once it has seen the object, the app remembers which way the phone was pointing (gyro), so when you turn away it says "Chair at 2 o'clock" and keeps pulsing toward it several times a second, stronger and faster as you face it, with a double pulse when you're lined up. Within reach, it dings and says "You're there. Reach forward." An obstacle right in front still says "Stop" over everything.
+**Find mode.** Say or pick what you're looking for: any of 79 everyday objects ("chair", "backpack", "laptop"), a description ("the red bench"), or anything else in plain words ("exit sign"). Turn slowly; when the app is sure, it locks on with a chime, and the voice tells you which way to turn: "Chair, turn a little right and walk about 3 meters." then "Straight ahead." the moment you're lined up. It remembers which way the phone was pointing (gyro), so if you turn away it says "Chair at 2 o'clock" and pulses toward it, stronger as you face it.
 
-**Indoor and outdoor setting.** Applies to both modes. Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors).
+Walking toward it, it watches the way:
+- Once you're lined up, it checks the straight line to the target: "Path to it looks open." or "Something in the way, about 2 meters. Go around it on the left."
+- Something close starts a detour ("Something close on your right. Step to your left."), and the voice says "Clear. Now turn right until it's in front of you." as soon as the obstacle slides off to the side.
+- Low things (a box, a bin, a step) are called out early, before they slip out of the bottom of the picture: "Something low ahead. Step to your left."
+- Things beside or behind the target, like the wall it stands against, don't count.
+
+Within reach, it dings and says where to reach: "You're there. Reach forward and a little left, at waist height." A "Stop" for something right in front wins over everything.
+
+**Walker.** A voice assistant. Press and hold anywhere and say what you want: "find the door", "start walking", "describe", "repeat that", "units feet", "warn me early", "use Sarah", "help". He walks new users through setup, and safety warnings always cut him off.
+
+**Indoor and outdoor setting.** Indoor, outdoor, or auto (guessed from the photo). Swaps the depth model and the warning distance (about 2 m indoors, about 4 m outdoors). "Warn me" sets it closer or earlier, and distances can be spoken in feet.
 
 **Limits.** This helps with stationary obstacles. It does not replace a cane, and outdoors it does not detect curbs, drop-offs, moving cars, or street crossings.
 
-**Trusted voices.** Record family members or friends for 30 seconds each, with their consent, and warnings play in their voice (ElevenLabs instant cloning). Four premade voices are offered too.
+**Trusted voices.** Record family members or friends for 30 seconds each, with their consent, and warnings play in their voice (ElevenLabs instant cloning, up to 5). Walker's own voice is the default, and a few premade voices are offered too. Only the app's own phrases can be spoken, so a cloned voice can't be made to say anything else.
 
 **Built for VoiceOver.** Every element is labeled, every state is spoken or felt, and a two finger double tap (magic tap) repeats the last warning.
 
@@ -25,20 +35,28 @@ Most apps only warn about things they can name. This one uses depth to find anyt
 1. The phone sends a photo to the backend.
 2. Depth Anything V2 (Hugging Face) estimates distance for every pixel.
 3. We check a lane down the middle of the frame, split into foot, waist, and head height, and find the closest thing within the warning distance.
-4. An object detector adds a name if it recognizes the obstacle. If not, we still warn.
+4. An object detector (DETR) adds a name if it recognizes the obstacle. If not, we still warn. Describe also names up to three other things it's sure of.
 5. Describe mode builds a short sentence and ElevenLabs speaks it. Guide mode gets distance, direction and open side back about once a second, and the phone turns changes into short spoken phrases in the chosen voice.
+6. Find mode sends frames to `/find`: DETR (or OWLv2 for anything else, SigLIP for descriptions) locates the target, the same depth map measures it and the way to it, and the phone's tracker and gyro turn that into turns, pulses, detours and arrival.
+
+Everything runs on a Hugging Face Space with a T4 GPU in half precision: about 0.1 to 0.3 s per frame on the server, two frames in flight.
 
 ## Repo layout
 
 ```
 backend/
   main.py           API server and endpoints (Juan)
-  pipeline.py       depth, lane logic, detection (Michael)
-  voice.py          ElevenLabs speech with a cache (Juan)
-  requirements.txt
+  pipeline.py       depth, lane logic, detection, Find, path check (Michael)
+  voice.py          ElevenLabs speech, cloning, with a cache (Juan)
+  deploy_space.py   deploys to the Hugging Face Space (Michael)
+  tune.py           scores tape-measured photos against the pipeline
+  Dockerfile, requirements.txt
   .env              API keys, never committed
-app/                Expo app (Agustin for UI, Juan for networking, audio, haptics)
-design/             link to the Figma file and exported screens (Agustin)
+app/
+  App.tsx           camera screen, Describe, Guide and Find logic, voice loop (Juan, Agustin, Michael)
+  tracker.ts        follows the Find target across frames (Michael, Juan)
+  Walker.tsx, walkerCommands.ts   the voice assistant (Agustin)
+  FindScreen.tsx, FindPicker.tsx, Settings.tsx, Setup.tsx   screens (Agustin)
 ```
 
 ## API
@@ -60,7 +78,7 @@ Full result for describe mode. Slower, called once per tap. Also takes an option
 | Field | Type | Meaning |
 |---|---|---|
 | `clear` | boolean | true if nothing is in the path within the warning distance |
-| `sentence` | string | what to say, for example "chair, about one meter, slightly left" |
+| `sentence` | string | what to say, for example "Chair, about 1 meter, slightly left. I also see a table on your right, about 3 meters." |
 | `label` | string or null | object name if the detector recognized it, otherwise null |
 | `distance_m` | number or null | distance to the closest obstacle, rounded to 0.5 m |
 | `direction` | string or null | `left`, `ahead`, or `right` |
@@ -105,7 +123,7 @@ Find mode: where a chosen object is, plus the usual obstacle reading from the sa
 
 ### POST /transcribe
 
-Spoken Find request to text (ElevenLabs speech-to-text, `scribe_v2`). Form upload: `audio`, a recording of a few seconds (m4a or wav, under 500 KB). Returns `{"text": "Find the red bench.", "target": "bench", "description": "red bench"}`: filler like "can you find me the … please" is dropped, and `target` is null when the request names nothing Find knows (for example "door"), so the app can say so. Then call `/find` with that `target` and `description`. Limited to 20 requests a minute so the public Space can't be used as a free transcription service. 502 if ElevenLabs refuses; the API key needs the **Speech to Text** permission.
+Spoken Find request to text (ElevenLabs speech-to-text, `scribe_v2`). Form upload: `audio`, a recording of a few seconds (m4a or wav, under 500 KB). Returns `{"text": "Find the red bench.", "target": "bench", "description": "red bench"}`: filler like "can you find me the … please" is dropped, and `target` is null when the request names nothing Find knows (for example "door"), so the app can say so. Then call `/find` with that `target` and `description`. Limited to 60 requests a minute so the public Space can't be used as a free transcription service. 502 if ElevenLabs refuses; the API key needs the **Speech to Text** permission.
 
 ### GET /find/targets
 
@@ -119,7 +137,7 @@ Adding, renaming and deleting voices need an `X-App-Key` header matching `APP_KE
 
 ### GET /voices
 
-The voices the app offers, cloned ones first, for example `{"default": "EXAV…", "voices": [{"id": "EXAV…", "name": "Sarah"}, …]}`.
+The voices the app offers, cloned ones first, for example `{"default": "iP95…", "voices": [{"id": "iP95…", "name": "Walker", "custom": false}, …]}`.
 
 ### POST /voices/clone
 
@@ -127,16 +145,17 @@ Form upload: `audio` (a recording of about 30 seconds, m4a or wav) and `consent`
 
 ### GET /voices/{voice_id}/sample.wav
 
-A WAV of a sample sentence in that voice, for the picker. Cached after the first call.
+A WAV of a sample sentence in that voice, starting with its own name ("Hi, I'm Sarah."), for the picker. Cached after the first call.
 
 ## Pipeline interface
 
-`pipeline.py` exposes two functions that `main.py` imports.
+`pipeline.py` exposes these functions to `main.py`.
 
 | Function | Takes | Returns |
 |---|---|---|
-| `describe(image, mode)` | a PIL image and `indoor` or `outdoor` | a dict with the /describe fields except `audio_b64` |
-| `sonar(image, mode)` | a PIL image and `indoor` or `outdoor` | a dict with the /sonar fields |
+| `describe(image, mode, warning, units)` | a PIL image and the settings | a dict with the /describe fields except `audio_b64` |
+| `sonar(image, mode, warning)` | a PIL image and the settings | a dict with the /sonar fields |
+| `find(image, mode, target, description, warning, units)` | a PIL image, the target and/or description, and the settings | a dict with the /find fields |
 
 `main.py` adds `audio_b64` by sending the sentence to ElevenLabs (`voice.py`), which keeps repeated sentences in memory.
 
@@ -146,7 +165,10 @@ A WAV of a sample sentence in that voice, for the picker. Cached after the first
 |---|---|
 | Depth, indoor | `depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf` |
 | Depth, outdoor | `depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf` |
-| Object labels | `facebook/detr-resnet-50` |
+| Object labels, Describe's objects, Find's 79 targets | `facebook/detr-resnet-50` |
+| Find anything else by name | `google/owlv2-base-patch16-ensemble` |
+| Find by description, indoor or outdoor guess | `google/siglip-base-patch16-224` |
+| Speech, speech to text, voice cloning | ElevenLabs Flash v2.5, Scribe v2, instant voice cloning |
 
 Check each model card on Hugging Face if a name doesn't load.
 
@@ -179,19 +201,19 @@ To reach the backend from a phone, run `ngrok http 8000` and share the link.
 
 ### Deployed backend
 
-The backend runs on a Hugging Face Space at `https://michaelmccamy-obstacle-alert-api.hf.space` (T4 GPU, about $0.40 an hour on Michael's account credits; `SPACE_HARDWARE` in `deploy_space.py` switches back to the CPU upgrade. Sleeps after an hour idle, so the first request after that takes about a minute). To redeploy after changing the backend, log in with a write token (`hf auth login`), then from `backend/` run `python deploy_space.py`. It uploads the code (never `.env`), copies the ElevenLabs key into the Space's secrets, and rebuilds in a few minutes.
+The backend runs on a Hugging Face Space at `https://michaelmccamy-obstacle-alert-api.hf.space` (T4 GPU, about $0.40 an hour on Michael's account credits; `SPACE_HARDWARE` in `deploy_space.py` switches back to the CPU upgrade. Sleeps after an hour idle, so the first request after that takes about a minute). To redeploy after changing the backend, log in with a write token (`hf auth login`), then from `backend/` run `python deploy_space.py`. It uploads the code (never `.env`), copies the ElevenLabs key, voice and `APP_KEY` into the Space's secrets, and rebuilds in a few minutes.
 
 ### App
 
 ```
 cd app
 npm install
-npx expo start
+npx expo start --tunnel
 ```
 
-Scan the QR code with Expo Go. The app uses expo-camera, expo-speech, expo-haptics, and expo-audio (the replacement for expo-av). Add any new package with `npx expo install <package>`, not `npm install`.
+Scan the QR code with Expo Go (the tunnel works from any network; scan the new code each time, not a recent project). The app uses expo-camera, expo-speech, expo-haptics, and expo-audio (the replacement for expo-av). Add any new package with `npx expo install <package>`, not `npm install`.
 
-Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backend link.
+Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backend link, and `EXPO_PUBLIC_APP_KEY` to the server's `APP_KEY`. Some filtered networks block `*.hf.space`; use cellular or a hotspot if the app can't reach the server.
 
 ## Accessibility rules
 
@@ -208,39 +230,22 @@ Set `EXPO_PUBLIC_API_URL` in `app/.env` to the ngrok link or the deployed backen
 
 | Person | Owns |
 |---|---|
-| Michael | Model pipeline in `pipeline.py`, depth, lane and height logic, detection labels, indoor and outdoor models, threshold tuning |
-| Juan | API in `main.py`, ElevenLabs, deployment, app networking, sonar loop, tones, haptics |
-| Agustin | Figma, app screens and overlay, onboarding, settings, VoiceOver labels with Juan, submission materials |
+| Michael | Model pipeline in `pipeline.py`: depth, lane and height logic, detection, Find, low obstacles and the path check, tuning on measured photos; the Hugging Face Space and GPU deploy; the Find tracker |
+| Juan | API in `main.py`, ElevenLabs speech and transcription, app networking, the guide and Find voice and haptics, Find guidance (turns, tilt, arrival) |
+| Agustin | Design, app screens and overlay, Walker, onboarding, settings, VoiceOver, submission materials |
 
-## Plan
+## What's next
 
-| Time | Goal |
-|---|---|
-| Now to 12am | Repo, accounts, keys, read the rules |
-| 12am to 2am | MVP. Tap, photo, real depth distance, spoken result |
-| 2am | Checkpoint. MVP works on a real phone |
-| 2am to 3am | Sonar endpoint, latency timing, list of app states |
-| 3am to 9am | Sleep |
-| 9am to 12pm | Height bands, labels, deploy, ElevenLabs, sonar loop, real main screen |
-| 12pm | Checkpoint. Both modes work on the deployed backend with the real UI |
-| 1pm to 4pm | Indoor and outdoor, direction tones, haptics, magic tap, onboarding, settings, VoiceOver |
-| 4pm | Checkpoint. All main features in |
-| 4pm to 6pm | Latency, voice cloning if stable, sound and haptics page, icon, animation |
-| 6pm to 7pm | Dinner and blindfold test |
-| 7pm to 8pm | Fixes, stable demo build, outdoor clip |
+- One LLM call per Find request (not per frame) to map a free description like "my MacBook" or "the thing I drink from" onto the built-in object names, falling back to open-vocabulary words. Per-frame vision models are too slow for the frame loop and give no box or distance.
+- Remembering a low obstacle's position after it leaves the picture, from the phone's motion, instead of a fixed hold.
+- LiDAR depth on Pro iPhones, and a native build instead of Expo Go for faster photos.
 
-**Cut order if behind.** Voice cloning, then outdoor mode, then settings, then onboarding. Never cut describe, sonar, or the main screen.
-
-**Backlog (after the demo).** One LLM call per Find request (not per frame) to map a free description like "my MacBook" or "the thing I drink from" onto the built-in object names, falling back to open-vocabulary words. Per-frame vision models are too slow for the 2 fps loop and give no box or distance.
-
-## Challenges
+## Prize tracks
 
 - Hugging Face Best Use of Open Source AI
 - ElevenLabs
 - Figma Best Design
 - GoDaddy Registry domain
 - DEV Writing Challenge (after the event)
-
-**Stretch only.** Live sonar with LiDAR on Pro iPhones, and a Tiger Data hazard map. Adobe Prettiest Hack if ahead.
 
 **How it's different.** Apple's distance features only work on Pro iPhones, and other apps only warn about things they can name. Ours works on any phone and warns about anything in your way.

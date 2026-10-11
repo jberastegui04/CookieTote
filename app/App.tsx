@@ -580,8 +580,6 @@ export default function App() {
   });
   const cameraRef = useRef<CameraView>(null);
   const [fastPictureSize, setFastPictureSize] = useState<string | undefined>(undefined);
-  const fastPictureSizeRef = useRef<string | undefined>(undefined); // same, for the frame loop's timing log
-  fastPictureSizeRef.current = fastPictureSize;
   const player = useAudioPlayer(null);
   const lastClip = useRef<File | null>(null);
   const [mode, setMode] = useState<Mode>('auto');
@@ -2493,11 +2491,6 @@ export default function App() {
     let applied = 0;
     let inFlight = 0;
     let failures = 0;
-    // Lag measurement: each frame's timings ride along with the next frame as `timing`, and the
-    // server logs them (see log_reading in backend/main.py). gap = since the previous capture
-    // started, net = round trip minus the server's own time (upload + download), age = capture to use.
-    let lastTiming = '';
-    let lastCaptureAt = 0;
 
     const fail = () => {
       failures += 1;
@@ -2522,12 +2515,6 @@ export default function App() {
       if (!cameraBusy.current && !describePlaying() && inFlight < GUIDE_IN_FLIGHT) {
         cameraBusy.current = true;
         const headingAtCapture = headingRef.current;
-        const t0 = Date.now();
-        const gap = lastCaptureAt ? t0 - lastCaptureAt : 0;
-        lastCaptureAt = t0;
-        let t1 = t0;
-        let t2 = t0;
-        let px = '?'; // the photo's own size: shows whether pictureSize took effect
         let uri: string | null = null;
         try {
           const photo = await cameraRef.current?.takePictureAsync({
@@ -2536,8 +2523,6 @@ export default function App() {
             skipProcessing: GUIDE_SKIP_PROCESSING,
           });
           if (!photo) throw new Error('No photo');
-          t1 = Date.now();
-          px = `${photo.width}x${photo.height}`;
           // Sharper frames only in Search; in Approach the target is near and speed matters.
           const sharp =
             findOnRef.current && findPhaseRef.current === 'search' && findBlanks.current >= FIND_BLANKS_FOR_SHARP;
@@ -2545,7 +2530,6 @@ export default function App() {
           // Already small (pictureSize): send as is. The server applies the rotation tag.
           const small = photo.width && photo.height && Math.min(photo.width, photo.height) <= width;
           uri = small ? photo.uri : await shrink(photo.uri, width);
-          t2 = Date.now();
         } catch (e) {
           console.warn(e);
           fail();
@@ -2558,10 +2542,7 @@ export default function App() {
           form.append('image', new File(uri));
           appendSettings(form);
           for (const [k, v] of Object.entries(fields())) form.append(k, v);
-          if (lastTiming) form.append('timing', lastTiming);
           inFlight += 1;
-          const sentAt = Date.now();
-          const waiting = inFlight;
           const abort = new AbortController();
           const timer = setTimeout(() => abort.abort(), FRAME_TIMEOUT_MS);
           // Not awaited: the next capture starts while this one is on its way.
@@ -2569,9 +2550,6 @@ export default function App() {
             .then(async (res) => {
               if (!res.ok) throw new Error(`Server ${res.status}`);
               const data = (await res.json()) as T;
-              const rt = Date.now() - sentAt;
-              const srv = (data as { server_ms?: number }).server_ms ?? 0;
-              lastTiming = `gap=${gap} cap=${t1 - t0} shrink=${t2 - t1} rt=${rt} srv=${srv} net=${rt - srv} age=${Date.now() - t0} inflight=${waiting} px=${px} size=${fastPictureSizeRef.current ?? 'full'}`;
               noteScene(data);
               if (n <= applied || !isOn()) return;
               applied = n;
@@ -2756,7 +2734,7 @@ export default function App() {
           : arrived
             ? "You're there"
             : guideOn || (resultVisible && result?.clear)
-            ? 'Path clear'
+            ? 'Path looks open'
             : 'Ready';
   const detail = busy
     ? 'Hold still'

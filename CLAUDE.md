@@ -2,7 +2,7 @@
 
 (Formerly Obstacle Alert, then WatchIt.)
 
-Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and low vision users about stationary obstacles in their walking path, on any phone using only the camera. Team of three, all new to hackathons: favor the simplest thing that works, give exact commands, and push back on added scope. `README.md` has the full plan, schedule, and cut order.
+Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and low vision users about stationary obstacles in their walking path, on any phone using only the camera. Team of three, all new to hackathons: favor the simplest thing that works, give exact commands, and push back on added scope. `README.md` has the features, API, setup and what's next.
 
 ## Features
 - Describe mode: tap anywhere, one photo goes to `/describe`, the app speaks the safety answer first ("Chair, about 1 meter, slightly left." or "Path ahead looks open."), then up to 3 other things the detector is sure of (score 0.9+, or 0.6+ for a box covering 1.5% of the picture; any distance; nearest first): "I also see a table on your left, about 3 meters, and two people on your right, about 2 meters."
@@ -13,8 +13,9 @@ Hackathon project (Knight Hacks IX, 36 hours). Mobile app that warns blind and l
 ## Layout and owners
 - `app/`: Expo SDK 57, React Native, TypeScript. Single screen in `App.tsx`. Agustin owns screens and overlay; Juan owns networking, audio, haptics. Read `app/AGENTS.md` before touching Expo APIs: they change every SDK, so check the versioned docs instead of trusting memory. Audio is `expo-audio` (not `expo-av`). Add packages with `npx expo install`, never `npm install <pkg>`.
 - `backend/main.py` (Juan): FastAPI routes. `backend/voice.py` (Juan): ElevenLabs speech, cached by sentence. `python main.py` starts it on port 8000.
-- `backend/pipeline.py` (Michael): `describe(image, mode)` and `sonar(image, mode)` take a PIL image and return a dict. Currently fake answers.
-- `design/` (Agustin): Figma link and exported screens.
+- `backend/pipeline.py` (Michael): `describe`, `sonar` and `find` take a PIL image (plus mode, warning, units, and Find's target) and return the response dicts; depth, lane and height logic, detection, open-vocabulary search, description matching, the indoor/outdoor guess. `backend/tune.py` scores a folder of tape-measured photos; `backend/depth_test.py` draws a depth map.
+- `backend/deploy_space.py` (Michael): pushes `backend/` to the Hugging Face Space `michaelmccamy/obstacle-alert-api` (T4 GPU) and copies the secrets. Redeploy after any backend change.
+- `app/tracker.ts` (Michael, Juan): follows one Find candidate across frames in gyro world coordinates, locks on after 2 confident sightings. `app/FindScreen.tsx`, `app/FindPicker.tsx`, `app/Settings.tsx`, `app/Setup.tsx` (Agustin): screens.
 
 ## API contract (keep app, backend, and README in sync; do not change field names)
 `/describe`, `/sonar`, `/find`: POST multipart with `image` (photo), plus optional `mode` ("indoor" | "outdoor" | "auto", default indoor; auto guesses the scene), `warning` ("close" | "normal" | "early", scales the 2 m / 4 m warning distance by 0.75 / 1 / 1.5), and `units` ("meters" | "feet", spoken sentences only; `distance_m` stays meters). Every response includes `scene` ("indoor" | "outdoor"), the mode actually used. Feet guide phrases ("Something ahead, about 6 feet.") are on the /say allowlist.
@@ -35,10 +36,13 @@ Walker (voice control, Agustin; `app/Walker.tsx`, `app/walkerCommands.ts`): pres
 
 `GET /voices` returns `default` (id) and `voices` ([{id, name, custom}], cloned first; `custom` is true for trusted voices). `GET /voices/{id}/sample.wav` returns a sample WAV. `POST /voices/clone` (form: `audio`, `consent=true`, optional `name`) adds an ElevenLabs instant clone ("Trusted voice", "Trusted voice 2", ... when unnamed), up to 5; needs a paid ElevenLabs plan. `POST /voices/{id}/name` (form: `name`) renames a trusted voice and `DELETE /voices/{id}` deletes one; both 404 for the premade voices. Voice clips are cached by (voice_id, sentence). Clone, rename and delete need header `X-App-Key` = `APP_KEY` (server env / Space secret), which the app sends from `EXPO_PUBLIC_APP_KEY`.
 
-## Models (Hugging Face, public, no token)
+## Models (Hugging Face, public, no token; the Docker image downloads them at build time)
 - `depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf` and `...-Outdoor-Small-hf` for depth. Anything in a center lane closer than the warning distance counts, split into foot, waist, head bands.
-- `facebook/detr-resnet-50` adds a label when it can. Warn even when unlabeled.
-- ElevenLabs Flash speaks the sentence. Cache clips by sentence text. The key lives only in `backend/.env`.
+- `facebook/detr-resnet-50` adds a label when it can (warn even when unlabeled), names Describe's other objects, and finds Find's 79 built-in targets.
+- `google/owlv2-base-patch16-ensemble` finds any other Find target from plain words ("exit sign").
+- `google/siglip-base-patch16-224` scores Find candidates against a description ("red bench") and guesses indoor or outdoor for `mode=auto`.
+- All run in fp16 on the Space's GPU (`FP16=0` turns that off).
+- ElevenLabs: Flash speaks the sentence (clips cached by voice and text), `scribe_v2` transcribes spoken requests, instant cloning makes trusted voices. The key lives only in `backend/.env` and the Space's secrets.
 
 ## Accessibility rules (non-negotiable)
 - Every touchable has `accessibilityLabel`, `accessibilityHint`, and `accessibilityRole`. The guide toggle uses the switch role. Test with VoiceOver on.
