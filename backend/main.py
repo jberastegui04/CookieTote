@@ -184,10 +184,11 @@ async def find(
     return result
 
 
-# A spoken Find request is a few seconds. Both limits keep the public Space from being a free
-# transcription service on the ElevenLabs credits.
+# A spoken request (Find, or a voice-navigation command) is a few seconds. Both limits keep the
+# public Space from being a free transcription service on the ElevenLabs credits. 60 a minute, shared
+# by everyone, leaves room for voice navigation with several phones testing at once.
 TRANSCRIBE_MAX_BYTES = 500_000
-TRANSCRIBE_PER_MINUTE = 20
+TRANSCRIBE_PER_MINUTE = 60
 _transcribe_times: deque[float] = deque()
 
 
