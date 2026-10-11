@@ -29,10 +29,11 @@ import { loadFindTargets, type LowObstacle } from './find';
 import FindScreen from './FindScreen';
 import { setTapHaptics, tapHaptic } from './feedback';
 import { useReduceMotion } from './motion';
+import { ViewfinderCorners } from './texture';
 import { WalkerBubble, WalkerButton, type WalkerState } from './Walker';
 import { findLine, LINES, parseCommand } from './walkerCommands';
 import { trackUpdate, trackView, type Candidate, type Track } from './tracker';
-import Setup, { type Vision } from './Setup';
+import Setup from './Setup';
 import { DEFAULT_PREFS, formatDistance, SPEEDS, type Prefs } from './prefs';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
@@ -93,7 +94,6 @@ const CLONE_MAX_MS = 30000;
 const CLONE_RECORDING_CUE = 'Recording. Speak naturally. Tap again to stop.';
 const VOICE_KEY = 'voice_id';
 const MODE_KEY = 'mode';
-const CAMERA_KEY = 'camera_picture';
 const SETUP_KEY = 'setup_done';
 // For the demo, setup opens on every launch (last choices already selected). Set to false so it only shows once.
 const ALWAYS_SHOW_SETUP = true;
@@ -427,7 +427,6 @@ async function shrink(uri: string, width: number): Promise<string> {
 }
 
 const DIRECTION_WORD = { left: 'slightly left', ahead: 'ahead', right: 'slightly right' } as const;
-const ARROW = { left: '←', ahead: '↑', right: '→' } as const;
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // Photos come back portrait 3:4; the preview fills the screen and crops the sides.
 const PHOTO_ASPECT = 3 / 4;
@@ -558,8 +557,6 @@ export default function App() {
 
   // Screens and layout. Settings opens over the camera so the guide keeps working.
   const [showSettings, setShowSettings] = useState(false);
-  // Off: no camera picture, just the big number (for people who see little of the screen).
-  const [cameraPicture, setCameraPicture] = useState(true);
   const { width: screenW, height: screenH } = useWindowDimensions();
   // null until the saved answer loads, so the camera doesn't flash before setup.
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
@@ -616,8 +613,8 @@ export default function App() {
       })
       .catch(() => {});
     const sub = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => (screenReader.current = on));
-    AsyncStorage.multiGet([MODE_KEY, CAMERA_KEY, SETUP_KEY, PREFS_KEY])
-      .then(([[, savedMode], [, savedCamera], [, savedSetup], [, savedPrefs]]) => {
+    AsyncStorage.multiGet([MODE_KEY, SETUP_KEY, PREFS_KEY])
+      .then(([[, savedMode], [, savedSetup], [, savedPrefs]]) => {
         setSetupDone(!ALWAYS_SHOW_SETUP && savedSetup === '1');
         if (savedPrefs) {
           const loaded = { ...DEFAULT_PREFS, ...JSON.parse(savedPrefs) };
@@ -629,7 +626,6 @@ export default function App() {
           modeRef.current = savedMode;
           setMode(savedMode);
         }
-        if (savedCamera === 'off') setCameraPicture(false);
       })
       .catch(() => setSetupDone(false));
     AsyncStorage.getItem(VOICE_KEY)
@@ -667,7 +663,6 @@ export default function App() {
   if (!setupDone) {
     return (
       <Setup
-        onVision={chooseVision}
         voices={voices}
         voiceId={voiceId}
         onPickVoice={pickVoice}
@@ -770,11 +765,6 @@ export default function App() {
     AsyncStorage.setItem(MODE_KEY, next).catch(() => {});
   }
 
-  function chooseVision(v: Vision) {
-    // Only those who can see the screen get the camera picture; the others get the big number.
-    changeCameraPicture(v === 'see');
-  }
-
   function finishSetup() {
     AsyncStorage.setItem(SETUP_KEY, '1').catch(() => {});
     setSetupDone(true);
@@ -810,12 +800,6 @@ export default function App() {
     return prefsRef.current.haptics ? Haptics.notificationAsync(type) : Promise.resolve();
   }
 
-
-  // No spoken echo here or in other taps: VoiceOver already reads the new state of what was tapped.
-  function changeCameraPicture(on: boolean) {
-    setCameraPicture(on);
-    AsyncStorage.setItem(CAMERA_KEY, on ? 'on' : 'off').catch(() => {});
-  }
 
   async function playUri(uri: string, headers?: Record<string, string>) {
     player.replace({ uri, headers });
@@ -2498,7 +2482,7 @@ export default function App() {
     <View style={styles.topBar} pointerEvents="box-none">
       {/* Where the app thinks you are. Not a button: change it in Settings. */}
       <View
-        style={[styles.chip, !cameraPicture && styles.chipLarge]}
+        style={styles.chip}
         accessible
         accessibilityRole="text"
         accessibilityLabel={whereLabel}
@@ -2506,7 +2490,7 @@ export default function App() {
         <Text style={styles.chipText}>{whereText}</Text>
       </View>
       <Pressable
-        style={({ pressed }) => [styles.chip, !cameraPicture && styles.chipLarge, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
         onPress={openSettings}
         accessibilityRole="button"
         accessibilityLabel="Settings"
@@ -2524,7 +2508,6 @@ export default function App() {
           pointerEvents="none"
           style={[
             styles.halo,
-            !cameraPicture && styles.haloLarge,
             { opacity: halo.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] }) },
           ]}
         />
@@ -2533,7 +2516,6 @@ export default function App() {
         style={({ pressed }) => [
           styles.guide,
           guideOn ? styles.guideOn : styles.guideOff,
-          !cameraPicture && styles.guideLarge,
           pressed && styles.pressed,
         ]}
         onPress={toggleGuide}
@@ -2556,7 +2538,7 @@ export default function App() {
   const findButton = (
     <View style={styles.modeCell}>
       <Pressable
-        style={({ pressed }) => [styles.guide, styles.guideOn, !cameraPicture && styles.guideLarge, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.guide, styles.guideOn, pressed && styles.pressed]}
         onPress={openFindPicker}
         accessibilityRole="button"
         accessibilityLabel="Find"
@@ -2571,7 +2553,7 @@ export default function App() {
 
   // Find and Guide side by side; Find is the main feature, so it comes first and is filled, the two things you start while walking.
   const walkerButton = (
-    <WalkerButton state={walkerState} onPress={walkerTap} size={cameraPicture ? 76 : 96} />
+    <WalkerButton state={walkerState} onPress={walkerTap} size={76} />
   );
   const walkerBubble = <WalkerBubble state={walkerState} text={walkerText} />;
 
@@ -2606,8 +2588,6 @@ export default function App() {
             .catch(() => {});
         }}
       />
-      {/* Camera picture off: cover the preview. The camera still runs underneath. */}
-      {!cameraPicture ? <View style={styles.cover} pointerEvents="none" /> : null}
 
       {/* The whole screen is one big tap target. */}
       <Pressable
@@ -2628,8 +2608,8 @@ export default function App() {
       />
 
       {findOn && findTarget ? (
-        <FindScreen target={findTarget} units={prefs.units} description={findDescriptionRef.current} result={liveFind} cameraPicture={cameraPicture} onStop={() => stopFind(false)} paused={walkerState !== 'idle'} onHold={walkerTap} walker={walkerButton} walkerBubble={walkerBubble} />
-      ) : cameraPicture ? (
+        <FindScreen target={findTarget} units={prefs.units} description={findDescriptionRef.current} result={liveFind} onStop={() => stopFind(false)} paused={walkerState !== 'idle'} onHold={walkerTap} walker={walkerButton} walkerBubble={walkerBubble} />
+      ) : (
         <>
           {/* Overlay drawing only; everything here is also spoken, so VoiceOver skips it. */}
           <View
@@ -2640,6 +2620,7 @@ export default function App() {
           >
             <LinearGradient colors={['rgba(0,0,0,0.7)', 'transparent']} style={styles.topShade} />
             <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={styles.bottomShade} />
+            <ViewfinderCorners style={styles.viewfinder} />
             {box ? (
               <>
                 <View style={[styles.box, box]} />
@@ -2670,43 +2651,12 @@ export default function App() {
             {modeButtons}
           </View>
         </>
-      ) : (
-        <>
-          {topBar}
-          <View style={styles.large} pointerEvents="box-none">
-            <View
-              style={styles.largeMiddle}
-              pointerEvents="none"
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              {label && showNumber ? <Text style={styles.largeLabel}>{label}</Text> : null}
-              <Text
-                style={[styles.largeHeadline, showNumber && styles.largeNumber]}
-                adjustsFontSizeToFit
-                numberOfLines={1}
-              >
-                {headline}
-              </Text>
-              {detail ? <Text style={styles.largeDetail}>{detail}</Text> : null}
-              {showNumber && direction ? (
-                <Text style={styles.arrow}>
-                  {ARROW[direction]}
-                </Text>
-              ) : null}
-            </View>
-            {walkerBubble}
-            {modeButtons}
-          </View>
-        </>
       )}
 
       {showSettings ? (
         <Settings
           mode={mode}
           onMode={changeMode}
-          cameraPicture={cameraPicture}
-          onCameraPicture={changeCameraPicture}
           prefs={prefs}
           onPrefs={updatePrefs}
           voices={voices}
@@ -2752,8 +2702,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   buttonText: { color: C.onAccent, fontSize: 26, ...font('bold') },
-  cover: { ...StyleSheet.absoluteFill, backgroundColor: C.bg },
   topShade: { position: 'absolute', top: 0, left: 0, right: 0, height: 180 },
+  // Between the top chips and the card and buttons at the bottom.
+  viewfinder: { top: SAFE.top + 76, bottom: SAFE.bottom + 250, left: GUTTER, right: GUTTER },
   bottomShade: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 320 },
   topBar: {
     position: 'absolute',
@@ -2770,7 +2721,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: C.glass,
   },
-  chipLarge: { backgroundColor: C.card, borderColor: C.border, borderWidth: 1.5 },
   chipText: { color: C.ink, fontSize: 18, ...font('semibold') },
   box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },
   tag: {
@@ -2799,31 +2749,16 @@ const styles = StyleSheet.create({
     borderRadius: 46,
     backgroundColor: C.accent,
   },
-  haloLarge: { borderRadius: 56 },
   headline: { color: C.accent, fontSize: 34, ...font('bold') },
   headlineNumber: { fontSize: 56, ...font('heavy') },
   detail: { color: C.ink2, fontSize: 18, marginTop: SPACE.xs, ...font('semibold') },
   // Fixed height (not minHeight) so Guide and Find always match, whatever the label says.
   guide: { height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  guideLarge: { height: 96, borderRadius: 48 },
   modeRow: { flexDirection: 'row', gap: SPACE.md },
   modeCell: { flex: 1 },
-  guideOn: { backgroundColor: C.accent },
+  guideOn: { backgroundColor: C.accent, borderBottomWidth: 5, borderBottomColor: C.accentDeep },
   guideOff: { backgroundColor: C.glass, borderWidth: 2, borderColor: C.accent },
   guideText: { fontSize: 26, ...font('bold') },
   guideTextOn: { color: C.onAccent },
   guideTextOff: { color: C.accent },
-  // Below the top chips (48 tall), above the home indicator.
-  large: {
-    ...StyleSheet.absoluteFill,
-    paddingTop: SAFE.top + SPACE.sm + 48 + SPACE.xl,
-    paddingHorizontal: GUTTER,
-    paddingBottom: SAFE.bottom + SPACE.sm,
-  },
-  largeMiddle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: SPACE.sm },
-  largeLabel: { color: C.ink, fontSize: 34, ...font('bold') },
-  largeHeadline: { color: C.accent, fontSize: 56, textAlign: 'center', ...font('heavy') },
-  largeNumber: { fontSize: 120 },
-  largeDetail: { color: C.ink, fontSize: 30, textAlign: 'center', ...font('bold') },
-  arrow: { color: C.ink, fontSize: 96, marginTop: 8, ...font('heavy') },
 });

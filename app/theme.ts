@@ -17,6 +17,8 @@ export const GUTTER = 20; // left and right margin on every screen
 export const C = {
   accent: '#FFD60A', // buttons, selected options, big numbers, the outline on the camera
   onAccent: '#0B0B0C', // text and icons on accent (14:1)
+  accentDeep: '#B89A00', // the darker bottom edge of yellow buttons, so they look like keys
+  edge: '#6A6A70', // the lighter top edge of cards and rows, for a little depth
   ink: '#FFFFFF', // main text (19:1 on bg)
   ink2: '#C7C7CC', // secondary text (12:1 on bg, 10:1 on card)
   bg: '#0B0B0C',

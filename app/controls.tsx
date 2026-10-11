@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { notchHaptic, tapHaptic } from './feedback';
 import { SPEEDS } from './prefs';
+import { GlowEdge } from './texture';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 // Shared pieces for Settings and the first-launch setup, so both look the same.
@@ -75,15 +76,19 @@ export function Header(p: {
         {p.title}
       </Text>
       {p.sub ? <Text style={s.bandSub}>{p.sub}</Text> : null}
+      <GlowEdge />
     </View>
   );
 }
 
 export function Section({ title }: { title: string }) {
   return (
-    <Text style={s.section} accessibilityRole="header">
-      {title}
-    </Text>
+    <View style={s.sectionRow}>
+      <View style={s.sectionTick} />
+      <Text style={s.section} accessibilityRole="header">
+        {title}
+      </Text>
+    </View>
   );
 }
 
@@ -266,7 +271,9 @@ export function SpeedSlider(p: { value: number; onChange: (i: number) => void })
 }
 
 const s = StyleSheet.create({
-  section: { color: C.accent, fontSize: 18, letterSpacing: 0.5, marginTop: SPACE.xxl, marginBottom: SPACE.md, ...font('bold') },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, marginTop: SPACE.xxl, marginBottom: SPACE.md },
+  sectionTick: { width: 10, height: 10, borderRadius: 2, backgroundColor: C.accent },
+  section: { color: C.accent, fontSize: 18, letterSpacing: 1.5, ...font('bold') },
   caption: { color: C.ink2, fontSize: 18, marginTop: SPACE.sm, lineHeight: 24, ...font('regular') },
   segment: {
     flexDirection: 'row',
@@ -274,6 +281,7 @@ const s = StyleSheet.create({
     borderColor: C.border,
     borderWidth: 1.5,
     borderRadius: 18,
+    borderTopColor: C.edge,
     padding: 4,
     minHeight: 72,
   },
@@ -288,13 +296,15 @@ const s = StyleSheet.create({
     backgroundColor: C.card,
     borderColor: C.border,
     borderWidth: 1.5,
+    borderTopColor: C.edge,
     borderRadius: 18,
     minHeight: 72,
     paddingHorizontal: 20,
     marginBottom: SPACE.md,
   },
-  rowActive: { borderColor: C.accent, borderWidth: 3 },
-  rowSelected: { borderColor: C.accent, borderWidth: 3, backgroundColor: C.tint },
+  // borderTopColor too: the rows' lighter top edge would otherwise stay gray above the yellow.
+  rowActive: { borderColor: C.accent, borderTopColor: C.accent, borderWidth: 3 },
+  rowSelected: { borderColor: C.accent, borderTopColor: C.accent, borderWidth: 3, backgroundColor: C.tint },
   pressed: { transform: [{ scale: 0.97 }], opacity: 0.9 },
   band: {
     backgroundColor: C.card,
@@ -303,6 +313,7 @@ const s = StyleSheet.create({
     paddingBottom: SPACE.xl,
     borderBottomLeftRadius: 28,
     borderBottomRightRadius: 28,
+    overflow: 'hidden', // the glow follows the rounded corners
   },
   bandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   bandBack: {
@@ -310,6 +321,8 @@ const s = StyleSheet.create({
     paddingHorizontal: 24,
     borderRadius: 28,
     backgroundColor: C.accent,
+    borderBottomWidth: 4,
+    borderBottomColor: C.accentDeep,
     justifyContent: 'center',
   },
   bandBackText: { color: C.onAccent, fontSize: 21, ...font('bold') },

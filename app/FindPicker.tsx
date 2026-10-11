@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Caption, Header, LinkRow, Section, Tap } from './controls';
 import { DESCRIPTION_MAX_CHARS, loadFindTargets, targetFromDescription } from './find';
 import { Enter } from './motion';
+import { DotGrid } from './texture';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Props = {
@@ -45,6 +46,7 @@ export default function FindPicker(p: Props) {
 
   return (
     <Enter from="up" style={styles.screen} accessibilityViewIsModal>
+      <DotGrid />
       <Header
         title="Find something"
         sub="Say it or type it."
@@ -115,6 +117,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: SPACE.md,
+    borderBottomWidth: 5,
+    borderBottomColor: C.accentDeep,
   },
   // Disabled until something is typed: outlined instead of filled, still readable.
   findItOff: { backgroundColor: C.bg, borderWidth: 2, borderColor: C.border },

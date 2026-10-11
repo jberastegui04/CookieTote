@@ -42,7 +42,6 @@ type Props = {
   units: Units;
   description?: string | null; // the user's words from the picker, like "red bench"
   result: FindResult | null; // newest POST /find answer; null until the first one arrives
-  cameraPicture: boolean; // false: plain white screen with bigger text (camera still runs underneath)
   onStop: () => void;
   paused?: boolean; // Walker has the floor; Find picks up again when he's done
   onHold?: () => void; // press and hold anywhere: talk to Walker (Find pauses)
@@ -96,7 +95,7 @@ export default function FindScreen(p: Props) {
 
   // Outline the target on the camera view, same mapping as the obstacle box.
   let box: { left: number; top: number; width: number; height: number } | null = null;
-  if (p.cameraPicture && found && r.box) {
+  if (found && r.box) {
     const [x, y, w, h] = r.box;
     const offX = (screenW - photoW) / 2;
     const offY = (screenH - scale) / 2;
@@ -113,7 +112,6 @@ export default function FindScreen(p: Props) {
   // Faded while the tracker is coasting (no answer has matched it for a moment), so it reads as "about here".
   const boxStyle = { left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight, opacity: r?.stale ? 0.45 : 1 };
 
-  const large = !p.cameraPicture;
 
   return (
     <Enter from="fade" style={styles.screen} accessibilityViewIsModal>
@@ -144,11 +142,11 @@ export default function FindScreen(p: Props) {
           <Text style={styles.bandTarget}>{p.description ? capitalize(p.description) : name}</Text>
         </View>
 
-        <View style={[styles.middle, large && styles.middleLarge]}>
-          <View style={[styles.card, large && styles.cardLarge]}>
+        <View style={styles.middle}>
+          <View style={styles.card}>
             <View style={styles.headRow}>
-              {arrow ? <Text style={[styles.arrow, large && styles.arrowLarge]}>{arrow}</Text> : null}
-              <Text style={[styles.headline, large && styles.headlineLarge]}>{headline}</Text>
+              {arrow ? <Text style={styles.arrow}>{arrow}</Text> : null}
+              <Text style={styles.headline}>{headline}</Text>
             </View>
             {detail ? <Text style={styles.detail}>{detail}</Text> : null}
             {found ? (
@@ -164,7 +162,7 @@ export default function FindScreen(p: Props) {
                 />
               </View>
             ) : null}
-            {distance ? <Text style={[styles.distance, large && styles.distanceLarge]}>{distance}</Text> : null}
+            {distance ? <Text style={styles.distance}>{distance}</Text> : null}
           </View>
         </View>
       </View>
@@ -186,7 +184,7 @@ export default function FindScreen(p: Props) {
         {p.walkerBubble}
         <View style={styles.bottomRow}>
           <Tap
-            style={[styles.stop, large && styles.stopLarge]}
+            style={styles.stop}
             onPress={p.onStop}
             accessibilityRole="button"
             accessibilityLabel={`Stop finding the ${p.target}`}
@@ -222,19 +220,15 @@ const styles = StyleSheet.create({
     right: GUTTER,
     bottom: SAFE.bottom + SPACE.sm + 80 + SPACE.md,
   },
-  middleLarge: { top: SAFE.top + 160, justifyContent: 'center' },
   card: {
     backgroundColor: C.glass,
     borderRadius: 22,
     paddingHorizontal: GUTTER,
     paddingVertical: SPACE.lg,
   },
-  cardLarge: { backgroundColor: C.card, paddingVertical: SPACE.xxl },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   arrow: { color: C.accent, fontSize: 48, ...font('heavy') },
-  arrowLarge: { fontSize: 80 },
   headline: { color: C.ink, fontSize: 30, flexShrink: 1, ...font('heavy') },
-  headlineLarge: { fontSize: 40 },
   detail: { color: C.ink2, fontSize: 19, marginTop: SPACE.xs, ...font('semibold') },
   meter: { height: DOT, marginTop: SPACE.lg, marginHorizontal: DOT / 2, justifyContent: 'center' },
   track: { height: 10, borderRadius: 5, backgroundColor: C.border },
@@ -260,11 +254,18 @@ const styles = StyleSheet.create({
   },
   dotOn: { backgroundColor: C.accent, borderColor: C.onAccent },
   distance: { color: C.accent, fontSize: 40, marginTop: SPACE.md, ...font('heavy') },
-  distanceLarge: { fontSize: 64 },
   bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm, gap: SPACE.md },
   bottomRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
-  stop: { flex: 1, minHeight: 80, borderRadius: 40, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
-  stopLarge: { minHeight: 96, borderRadius: 48 },
+  stop: {
+    flex: 1,
+    minHeight: 80,
+    borderRadius: 40,
+    backgroundColor: C.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 5,
+    borderBottomColor: C.accentDeep,
+  },
   stopText: { color: C.onAccent, fontSize: 26, ...font('bold') },
   box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },
   boxSearching: { borderWidth: 3, borderStyle: 'dashed' },

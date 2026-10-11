@@ -3,6 +3,7 @@ import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-nati
 import { Caption, Header, LinkRow, Section, Segment, SpeedSlider, Tap, ToggleRow, VoiceList } from './controls';
 import type { Prefs } from './prefs';
 import { Enter } from './motion';
+import { DotGrid } from './texture';
 import { C, font, GUTTER, SAFE, SPACE } from './theme';
 
 type Mode = 'auto' | 'indoor' | 'outdoor';
@@ -13,8 +14,6 @@ type Listen = 'idle' | 'listening' | 'working';
 type Props = {
   mode: Mode;
   onMode: (m: Mode) => void;
-  cameraPicture: boolean;
-  onCameraPicture: (on: boolean) => void;
   prefs: Prefs;
   onPrefs: (p: Partial<Prefs>) => void;
   voices: Voice[];
@@ -104,6 +103,7 @@ export default function Settings(p: Props) {
       ]);
     return (
       <Enter key="edit" from="right" style={styles.screen} accessibilityViewIsModal>
+        <DotGrid />
         <Header
           title={unnamed ? 'Name the new voice' : editing.name}
           sub={unnamed ? 'Say it or type it.' : undefined}
@@ -162,6 +162,7 @@ export default function Settings(p: Props) {
     const own = p.voices.filter((v) => v.custom);
     return (
       <Enter key="voice" from={backFromEdit ? 'fade' : 'right'} style={styles.screen} accessibilityViewIsModal>
+        <DotGrid />
         <Header
           title="Voice"
           sub="Tap one to hear it."
@@ -201,6 +202,7 @@ export default function Settings(p: Props) {
 
   return (
     <Enter key="main" from={opened.current ? 'fade' : 'up'} style={styles.screen} accessibilityViewIsModal>
+      <DotGrid />
       <Header title="Settings" onBack={p.onClose} backHint="Returns to the camera" />
       <ScrollView contentContainerStyle={styles.content}>
 
@@ -234,14 +236,6 @@ export default function Settings(p: Props) {
             { value: 'normal', label: 'Normal', hint: 'The usual warning distance' },
             { value: 'early', label: 'Early', hint: 'Warns sooner, so you have more time to stop' },
           ]}
-        />
-
-        <Section title="SCREEN" />
-        <ToggleRow
-          label="Camera picture"
-          hint="When off, the screen shows only a big distance number"
-          value={p.cameraPicture}
-          onChange={p.onCameraPicture}
         />
 
         <Section title="SOUND & TOUCH" />
