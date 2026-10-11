@@ -338,7 +338,7 @@ const FINDING_IT = 'Finding it. Turn slowly.';
 const FIND_SMALL_TURN_DEG = 15;
 const LINED_UP_PHRASE = 'Straight ahead.';
 const LINED_UP_EVERY_MS = 3000; // not more often than this, however the hand wobbles
-const TURN_WORDS = /turn (a little )?(left|right)|slightly (left|right)|o'clock/; // an instruction to turn
+const TURN_WORDS = /turn (a little )?(left|right)|slightly (left|right)|to your (left|right)|o'clock/; // says it's off to one side
 type Tilt = 'up' | 'down';
 const TILT_START = 0.72; // box center this far down the picture (0 top, 1 bottom): tilt down. Mirrored for up.
 const TILT_STOP = 0.62; // keep saying it until the center is back inside this
@@ -364,7 +364,7 @@ function howFar(meters: number, units: Units): string {
 // together, so the app can change the direction (from the gyro) or the distance (from the box) and
 // still say something on the /say list. Three wordings exist, newest first; the app answers in
 // whichever one the server it is talking to uses, so wordings (and voices) are never mixed:
-//   walk      "Chair, turn a little left and walk about 2 meters."  /  "Chair, very close, turn left."
+//   walk      "Chair, turn a little left and walk about 2 meters."  /  "Chair, very close, a little to your left."
 //   comma     "Chair, turn left, about 2 meters."   (was heard as "turn left about 2 meters")
 //   slightly  "Chair, slightly left, about 2 meters."
 // Straight ahead is the same in all three: "Chair, ahead, about 2 meters."
@@ -372,7 +372,7 @@ type Wording = 'walk' | 'comma' | 'slightly';
 type FindParts = { name: string; side: 'left' | 'right' | null; small: boolean; far: string };
 function wordingOf(sentence: string): Wording | null {
   if (sentence.includes('slightly ')) return 'slightly';
-  if (sentence.includes(' and walk ') || /, very close, turn /.test(sentence)) return 'walk';
+  if (sentence.includes(' and walk ') || /, very close, (turn |a little to your |to your )/.test(sentence)) return 'walk';
   if (/, turn [a-z ]+, /.test(sentence)) return 'comma';
   return null; // "ahead", or not a sighting: says nothing about the wording
 }
@@ -393,7 +393,9 @@ function findSentence(p: FindParts, wording: Wording): string {
   if (wording === 'slightly') return `${p.name}, slightly ${p.side}, ${p.far}.`;
   const turn = p.small ? `turn a little ${p.side}` : `turn ${p.side}`;
   if (wording === 'comma') return `${p.name}, ${turn}, ${p.far}.`;
-  return p.far === 'very close' ? `${p.name}, very close, ${turn}.` : `${p.name}, ${turn} and walk ${p.far}.`;
+  // Within reach it says where the target is, not a turn (see find_sentence).
+  if (p.far === 'very close') return `${p.name}, very close, ${p.small ? 'a little ' : ''}to your ${p.side}.`;
+  return `${p.name}, ${turn} and walk ${p.far}.`;
 }
 // A Find sentence with its distance replaced.
 function withHowFar(sentence: string, meters: number, units: Units, wording: Wording): string {

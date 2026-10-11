@@ -504,7 +504,9 @@ def find_sentence(
         return f"{name}, ahead, {far}."
     turn = f"turn a little {direction}" if small else f"turn {direction}"
     if far == "very close":
-        return f"{name}, very close, {turn}."
+        # Within reach nobody turns and walks: say where it is. (Not "right in front of you": "right"
+        # would collide with the direction.)
+        return f"{name}, very close, {'a little ' if small else ''}to your {direction}."
     return f"{name}, {turn} and walk {far}."
 
 
