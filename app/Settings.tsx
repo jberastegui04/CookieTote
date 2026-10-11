@@ -233,6 +233,14 @@ export default function Settings(p: Props) {
           onChange={p.onCameraPicture}
         />
 
+        <Section title="WALKER" />
+        <ToggleRow
+          label="Hey Walker"
+          hint="Listens for Hey Walker so you can talk to him without tapping. Uses more battery. When off, tap the Walker button."
+          value={p.prefs.heyWalker}
+          onChange={(v) => p.onPrefs({ heyWalker: v })}
+        />
+
         <Section title="SOUND & TOUCH" />
         <ToggleRow
           label="Guidance voice"

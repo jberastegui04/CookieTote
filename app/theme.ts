@@ -25,6 +25,8 @@ export const C = {
   border: '#48484A',
   off: '#636366', // switch track when off
   tint: '#2E2809', // dark yellow fill behind a selected row (white on it is 15:1)
+  walker: '#64D2FF', // Walker, the voice assistant: his own color, like his own voice (11:1 on bg)
+  onWalker: '#0B0B0C',
 };
 
 // Atkinson Hyperlegible Next, made for low vision readers. Loaded with useFonts in App.tsx;

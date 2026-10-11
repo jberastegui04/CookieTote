@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Tap } from './controls';
 import { formatDistance, type Units } from './prefs';
@@ -43,6 +43,8 @@ type Props = {
   result: FindResult | null; // newest POST /find answer; null until the first one arrives
   cameraPicture: boolean; // false: plain white screen with bigger text (camera still runs underneath)
   onStop: () => void;
+  walker?: ReactNode; // Walker's button, next to Stop finding
+  walkerBubble?: ReactNode; // what Walker is doing, above the buttons
 };
 
 // Photos come back portrait 3:4; the preview fills the screen and crops the sides.
@@ -158,15 +160,19 @@ export default function FindScreen(p: Props) {
       </View>
 
       <View style={styles.bottom} pointerEvents="box-none">
-        <Tap
-          style={[styles.stop, large && styles.stopLarge]}
-          onPress={p.onStop}
-          accessibilityRole="button"
-          accessibilityLabel={`Stop finding the ${p.target}`}
-          accessibilityHint="Returns to the camera"
-        >
-          <Text style={styles.stopText}>Stop finding</Text>
-        </Tap>
+        {p.walkerBubble}
+        <View style={styles.bottomRow}>
+          <Tap
+            style={[styles.stop, large && styles.stopLarge]}
+            onPress={p.onStop}
+            accessibilityRole="button"
+            accessibilityLabel={`Stop finding the ${p.target}`}
+            accessibilityHint="Returns to the camera"
+          >
+            <Text style={styles.stopText}>Stop finding</Text>
+          </Tap>
+          {p.walker}
+        </View>
       </View>
     </Enter>
   );
@@ -232,8 +238,9 @@ const styles = StyleSheet.create({
   dotOn: { backgroundColor: C.accent, borderColor: C.onAccent },
   distance: { color: C.accent, fontSize: 40, marginTop: SPACE.md, ...font('heavy') },
   distanceLarge: { fontSize: 64 },
-  bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm },
-  stop: { minHeight: 80, borderRadius: 40, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
+  bottom: { position: 'absolute', left: GUTTER, right: GUTTER, bottom: SAFE.bottom + SPACE.sm, gap: SPACE.md },
+  bottomRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  stop: { flex: 1, minHeight: 80, borderRadius: 40, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
   stopLarge: { minHeight: 96, borderRadius: 48 },
   stopText: { color: C.onAccent, fontSize: 26, ...font('bold') },
   box: { position: 'absolute', borderWidth: 5, borderColor: C.accent, borderRadius: 18 },

@@ -135,7 +135,40 @@ DETOUR_PHRASES = {
     "Clear. Now turn left until it's in front of you.",
     "Still blocked. Back up a step.",
 }
-GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES | DETOUR_PHRASES
+# Short status messages the app says with tell(), so they come in the chosen voice like everything
+# else (otherwise the phone's own voice cuts in). Mirrors the tell() calls in app/App.tsx.
+STATUS_PHRASES = {
+    "Find off", "Still checking.", "Nothing to repeat yet. Tap anywhere to scan.",
+    "Lost connection.", "No connection. Try again.",
+    "Finding it. Turn slowly.",
+    "Microphone access is needed to say what to find.", "I didn't catch that. Try again.",
+    "I didn't catch what to find. Try again, like: find the red chair.", "Could not understand. Try again, or type it.",
+    "Microphone access is needed to say the name.", "Could not hear the name. Try again, or type it.",
+    "Could not rename the voice. Try again.", "Could not delete the voice. Try again.",
+    "This records a trusted person for thirty seconds and makes a voice from it. "
+    "Only record someone who has agreed. Double tap again to start recording.",
+    "Microphone access is needed to record a voice.", "Could not start recording.",
+    "Adding the voice, please wait.", "Voice added.", "Could not add the voice. Try again.",
+    # The reasons /voices/clone gives when it refuses (voice.VoiceRejected), which the app says aloud.
+    "ElevenLabs flagged this recording. Record a real person in a quiet room.",
+    f"You have {voice.MAX_CLONES} trusted voices. Delete one in Settings first.",
+}
+STATUS_PHRASES |= {f"Finding {t}. Turn slowly." for t in pipeline.FIND_TARGETS}
+# Walker, the voice assistant (Agustin): his fixed lines, spoken in his own voice. Mirrors LINES and
+# findLine in app/walkerCommands.ts.
+WALKER_PHRASES = {
+    "Sure thing. Let's find it.", "What should I look for?",
+    "Alright, guide's on. I'll let you know what's in your way.", "Okay, guide's off.",
+    "Let me take a look.", "Here it is again.", "Opening settings.", "Okay, stopping everything.",
+    "Got it. Feet it is.", "Got it. Meters it is.", "Got it. I'll give you a heads up early.",
+    "Got it. Normal warnings.", "Got it. I'll only warn you when things are close.", "Got it. Here's the new voice.",
+    "You can say: find the door. Start walking, or stop. What is in front of me. Repeat that. "
+    "Units feet, or meters. Warn me early, normal, or close. Use, and a voice name. Or settings.",
+    "Sorry, say help for options.", "Yeah? What do you need?", "Sorry, I didn't catch that.",
+    "Sorry, I couldn't hear you. Try again.", "I need the microphone to hear you.",
+}
+WALKER_PHRASES |= {f"Sure thing. Let's find the {t}." for t in pipeline.FIND_TARGETS}
+GUIDE_PHRASES = guide_phrases() | pipeline.find_phrases() | ARRIVAL_PHRASES | CLOCK_PHRASES | DETOUR_PHRASES | STATUS_PHRASES | WALKER_PHRASES
 
 
 @app.get("/say")
@@ -243,11 +276,12 @@ async def transcribe(audio: UploadFile = File(...)):
     open_vocab = target is None
     if open_vocab and description and not asks(text) and len(description.split()) > OPEN_VOCAB_MAX_WORDS:
         # Doesn't sound like a thing to find. The app asks again instead of searching for it.
-        return {"text": text, "target": None, "description": description, "open_vocab": False}
+        return {"text": text, "heard": full, "target": None, "description": description, "open_vocab": False}
     if open_vocab:
         # Not one of the 13: /find searches for the words themselves ("door", "exit sign").
         target = pipeline.open_query(description)
-    return {"text": text, "target": target, "description": description, "open_vocab": open_vocab and target is not None}
+    # heard: everything said, before the cut to the request. Walker needs it to hear his name.
+    return {"text": text, "heard": full, "target": target, "description": description, "open_vocab": open_vocab and target is not None}
 
 
 @app.get("/voices")
